@@ -62,13 +62,9 @@ async def identify(
     ]
 
     # ✅ organs: így kell küldeni, hogy organs=leaf&organs=flower...
-    data = []
-    for o in organs:
-        data.append(("organs", o))
-
-    # ✅ boolean mezők
-    data.append(("includeRelatedImages", "true" if includeRelatedImages else "false"))
-    data.append(("noReject", "true" if noReject else "false"))
+data = []
+for o in organs:
+    data.append(("organs", o))
 
     # ✅ api-key query param
     params = {"api-key": PLANTNET_API_KEY}
