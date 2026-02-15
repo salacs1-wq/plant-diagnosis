@@ -1,3 +1,8 @@
+import base64
+import os
+import requests
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import os
 import requests
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
@@ -96,6 +101,65 @@ async def identify(
             "organs": plantnet.get("query", {}).get("organs", [organs]),
             "language": plantnet.get("language")
         }
+    }
+class IdentifyBase64Request(BaseModel):
+    image_base64: str
+    organs: str = "leaf"
+    project: str = "all"
+    top_k: int = 3
+
+@app.post("/identify_base64")
+def identify_base64(payload: IdentifyBase64Request):
+    api_key = os.getenv("PLANTNET_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="PLANTNET_API_KEY nincs beállítva a szerveren.")
+
+    # Base64 dekódolás
+    try:
+        b64 = payload.image_base64
+        if "," in b64:
+            # ha data URL formában jön (data:image/jpeg;base64,....) akkor levágjuk a fejlécet
+            b64 = b64.split(",", 1)[1]
+        image_bytes = base64.b64decode(b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Hibás image_base64 formátum.")
+
+    # Pl@ntNet hívás (ugyanúgy, mint a fájlfeltöltésnél)
+    url = f"https://my-api.plantnet.org/v2/identify/{payload.project}"
+    params = {"api-key": api_key}
+    files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
+    data = {"organs": payload.organs}
+
+    try:
+        r = requests.post(url, params=params, files=files, data=data, timeout=60)
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"PlantNet kapcsolat hiba: {str(e)}")
+
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"PlantNet hiba: {r.text}")
+
+    plantnet = r.json()
+    results = plantnet.get("results") or []
+    best_match = plantnet.get("bestMatch")
+
+    # Rövid válasz
+    top = []
+    for item in results[: payload.top_k]:
+        sp = (item.get("species") or {})
+        top.append({
+            "score": float(item.get("score") or 0.0),
+            "scientificName": sp.get("scientificName") or sp.get("scientificNameWithoutAuthor"),
+            "family": (sp.get("family") or {}).get("scientificNameWithoutAuthor"),
+            "commonNames": sp.get("commonNames") or [],
+        })
+
+    top1 = float(results[0].get("score") or 0.0) if len(results) >= 1 else 0.0
+
+    return {
+        "bestMatch": best_match,
+        "confidence": {"top1_score": top1},
+        "topMatches": top,
+        "meta": {"project": payload.project, "organs": [payload.organs], "language": plantnet.get("language")}
     }
 
     if raw:
