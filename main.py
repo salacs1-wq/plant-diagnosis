@@ -52,7 +52,7 @@ async def identify(
 
     image_bytes = await image.read()
 
-    url = f"{PLANTNET_BASE}/{project}"
+    url = "https://my-api.plantnet.org/v2/identify/all"
     params = {"api-key": PLANTNET_API_KEY}
     files = {"images": ("image.jpg", image_bytes, image.content_type or "image/jpeg")}
     data = {"organs": organs}
