@@ -1,4 +1,3 @@
-# main.py
 import os
 from typing import List, Optional
 
@@ -14,11 +13,10 @@ PLANTNET_IDENTIFY_URL = "https://my-api.plantnet.org/v2/identify/all"
 
 app = FastAPI(
     title="Plant Diagnosis API (PlantNet proxy)",
-    version="1.0.0",
+    version="1.0.1",
     description="PlantNet alapú növényazonosítás kép-feltöltéssel (proxy).",
 )
 
-# (Opcionális) CORS – nem árt, ha később böngészőből hívod
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,22 +33,21 @@ def health():
 
 @app.post("/identify")
 async def identify(
-    # FONTOS: a mező neve pontosan "image" (ezt várja a GPT Actions is)
+    # FONTOS: a mező neve pontosan "image"
     image: UploadFile = File(..., description="A feltöltött kép (JPG/PNG)."),
-    # Ezeket hagyhatod alapértelmezetten is, de jó ha megvannak
+    # organs listaként jön (pl. leaf), ezt mi jól fogjuk továbbítani
     organs: List[str] = Form(default=["leaf"], description="Pl.: leaf, flower, fruit, bark..."),
-    language: str = Form(default="en", description="Pl.: en, hu"),
+    # elfogadjuk, de NEM küldjük PlantNet felé (mert ott nem mindig támogatott)
+    language: Optional[str] = Form(default=None, description="Pl.: en, hu (nem kerül továbbításra PlantNet felé)"),
     includeRelatedImages: bool = Form(default=False),
     noReject: bool = Form(default=False),
 ):
-    # 1) API kulcs ellenőrzés
     if not PLANTNET_API_KEY:
         raise HTTPException(
             status_code=500,
             detail="Hiányzik a PLANTNET_API_KEY környezeti változó a Renderen.",
         )
 
-    # 2) Beolvassuk a feltöltött képet
     try:
         img_bytes = await image.read()
     except Exception as e:
@@ -59,23 +56,23 @@ async def identify(
     if not img_bytes or len(img_bytes) < 200:
         raise HTTPException(status_code=400, detail="Üres vagy túl kicsi képfájl érkezett.")
 
-    # 3) PlantNet kérés összeállítása (multipart/form-data)
-    # PlantNet a képet tipikusan "images" néven várja (több kép is lehet)
-    files = {
-        "images": (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg")
-    }
+    # ✅ PlantNet: multipart (images + organs mezők ismételve)
+    files = [
+        ("images", (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg"))
+    ]
 
-    # Query param az api-key
+    # ✅ organs: így kell küldeni, hogy organs=leaf&organs=flower...
+    data = []
+    for o in organs:
+        data.append(("organs", o))
+
+    # ✅ boolean mezők
+    data.append(("includeRelatedImages", "true" if includeRelatedImages else "false"))
+    data.append(("noReject", "true" if noReject else "false"))
+
+    # ✅ api-key query param
     params = {"api-key": PLANTNET_API_KEY}
 
-    # Form mezők PlantNet felé
-    data = {
-        "organs": organs,  # requests kezeli listaként is (organs=leaf&organs=flower...)
-        "includeRelatedImages": str(includeRelatedImages).lower(),
-        "noReject": str(noReject).lower(),
-    }
-
-    # 4) Meghívjuk a PlantNet-et
     try:
         r = requests.post(
             PLANTNET_IDENTIFY_URL,
@@ -87,15 +84,13 @@ async def identify(
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"PlantNet hálózati hiba: {e}")
 
-    # 5) Hibakezelés PlantNet válasznál
-    if r.status_code == 401 or r.status_code == 403:
+    if r.status_code in (401, 403):
         raise HTTPException(
             status_code=502,
             detail=f"PlantNet jogosultsági hiba ({r.status_code}). Ellenőrizd az API kulcsot / korlátozásokat.",
         )
 
     if r.status_code >= 400:
-        # PlantNet gyakran JSON-ben ad hibát
         try:
             err_json = r.json()
         except Exception:
@@ -105,13 +100,11 @@ async def identify(
             detail={"plantnet_status": r.status_code, "plantnet_error": err_json},
         )
 
-    # 6) Sikeres válasz feldolgozása
     try:
         out = r.json()
     except Exception:
         raise HTTPException(status_code=502, detail="PlantNet nem JSON választ adott (váratlan).")
 
-    # Egyszerűsített válasz a GPT-nek (top3 + confidence)
     results = out.get("results", []) or []
     top = results[:3]
 
@@ -141,7 +134,6 @@ async def identify(
     top2 = simplified_top[1]["score"] if len(simplified_top) > 1 else None
     gap = (top1 - top2) if (top1 is not None and top2 is not None) else None
 
-    # egyszerű "bizalom" szint
     level = "alacsony"
     if top1 is not None:
         if top1 >= 0.7:
@@ -166,8 +158,8 @@ async def identify(
             "topMatches": simplified_top,
             "meta": {
                 "organs": organs,
-                "language": language,
+                "language": language,  # csak info, NEM megy PlantNetnek
             },
-            "raw": out,  # ha nem kell, később kivehetjük
+            "raw": out,
         }
     )
