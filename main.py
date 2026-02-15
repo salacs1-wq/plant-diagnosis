@@ -71,7 +71,6 @@ async def identify(
     # Form mezők PlantNet felé
     data = {
         "organs": organs,  # requests kezeli listaként is (organs=leaf&organs=flower...)
-        "language": language,
         "includeRelatedImages": str(includeRelatedImages).lower(),
         "noReject": str(noReject).lower(),
     }
