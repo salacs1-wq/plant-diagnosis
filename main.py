@@ -1,168 +1,174 @@
-import base64
+# main.py
 import os
+from typing import List, Optional
+
 import requests
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import os
-import requests
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
-PLANTNET_BASE = "https://my-api.plantnet.org/v2/identify"
 
-app = FastAPI()
+# PlantNet base endpoint (My Pl@ntNet API)
+PLANTNET_IDENTIFY_URL = "https://my-api.plantnet.org/v2/identify/all"
+
+app = FastAPI(
+    title="Plant Diagnosis API (PlantNet proxy)",
+    version="1.0.0",
+    description="PlantNet alapú növényazonosítás kép-feltöltéssel (proxy).",
+)
+
+# (Opcionális) CORS – nem árt, ha később böngészőből hívod
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/")
-def home():
-    return {"status": "ok", "message": "Plant diagnosis API running"}
+def health():
+    return {"status": "ok", "message": "Növénydiagnosztikai API fut"}
 
-def confidence_label(score: float) -> str:
-    # Egyszerű, terepi címkék
-    if score >= 0.75:
-        return "magas"
-    if score >= 0.45:
-        return "közepes"
-    return "alacsony"
-
-def next_photos_hint(best_scientific: str, top2_gap: float) -> list[str]:
-    # Általános, hasznos fotóigények (később kultúra/gyomcsoport szerint finomítható)
-    hints = [
-        "teljes növény (tő + levelek) közelről",
-        "tőlevélrózsa / szártő részlete",
-        "ha van: virág/termés közelről",
-    ]
-    # Ha nagyon bizonytalan (kicsi különbség a top1-top2 között), kérj több döntő részletet
-    if top2_gap < 0.10:
-        hints.append("levélalak és levélszél közelről (fogazottság, karéjok)")
-    # Capsella esetén külön megjegyzés
-    if "Capsella" in (best_scientific or ""):
-        hints.append("ha lehet: táskás becő (pásztortáska termése) közelről")
-    return hints
 
 @app.post("/identify")
 async def identify(
-    image: UploadFile = File(...),
-    organs: str = Query("leaf", description="Organ hint for PlantNet (leaf/flower/fruit/bark/auto)."),
-    project: str = Query("all", description="PlantNet project, usually 'all'."),
-    top_k: int = Query(3, ge=1, le=10, description="How many top matches to return in short output."),
-    raw: bool = Query(False, description="If true, include full PlantNet raw response under 'raw'.")
+    # FONTOS: a mező neve pontosan "image" (ezt várja a GPT Actions is)
+    image: UploadFile = File(..., description="A feltöltött kép (JPG/PNG)."),
+    # Ezeket hagyhatod alapértelmezetten is, de jó ha megvannak
+    organs: List[str] = Form(default=["leaf"], description="Pl.: leaf, flower, fruit, bark..."),
+    language: str = Form(default="en", description="Pl.: en, hu"),
+    includeRelatedImages: bool = Form(default=False),
+    noReject: bool = Form(default=False),
 ):
+    # 1) API kulcs ellenőrzés
     if not PLANTNET_API_KEY:
-        raise HTTPException(status_code=500, detail="PLANTNET_API_KEY nincs beállítva a szerveren.")
+        raise HTTPException(
+            status_code=500,
+            detail="Hiányzik a PLANTNET_API_KEY környezeti változó a Renderen.",
+        )
 
-    image_bytes = await image.read()
+    # 2) Beolvassuk a feltöltött képet
+    try:
+        img_bytes = await image.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Nem tudtam beolvasni a képfájlt: {e}")
 
-    url = "https://my-api.plantnet.org/v2/identify/all"
+    if not img_bytes or len(img_bytes) < 200:
+        raise HTTPException(status_code=400, detail="Üres vagy túl kicsi képfájl érkezett.")
+
+    # 3) PlantNet kérés összeállítása (multipart/form-data)
+    # PlantNet a képet tipikusan "images" néven várja (több kép is lehet)
+    files = {
+        "images": (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg")
+    }
+
+    # Query param az api-key
     params = {"api-key": PLANTNET_API_KEY}
-    files = {"images": ("image.jpg", image_bytes, image.content_type or "image/jpeg")}
-    data = {"organs": organs}
 
-    try:
-        r = requests.post(url, params=params, files=files, data=data, timeout=60)
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"PlantNet kapcsolat hiba: {str(e)}")
-
-    if r.status_code != 200:
-        # PlantNet hiba szövegét add vissza diagnosztikához
-        raise HTTPException(status_code=500, detail=f"PlantNet hiba: {r.text}")
-
-    plantnet = r.json()
-
-    results = plantnet.get("results") or []
-    best_match = plantnet.get("bestMatch")
-
-    # Top találatok rövidítése
-    top = []
-    for item in results[:top_k]:
-        sp = (item.get("species") or {})
-        top.append({
-            "score": round(float(item.get("score") or 0.0), 5),
-            "scientificName": sp.get("scientificName") or sp.get("scientificNameWithoutAuthor"),
-            "scientificNameWithoutAuthor": sp.get("scientificNameWithoutAuthor"),
-            "family": (sp.get("family") or {}).get("scientificNameWithoutAuthor"),
-            "commonNames": sp.get("commonNames") or [],
-        })
-
-    top1 = float(results[0].get("score") or 0.0) if len(results) >= 1 else 0.0
-    top2 = float(results[1].get("score") or 0.0) if len(results) >= 2 else 0.0
-    gap = top1 - top2
-
-    response = {
-        "bestMatch": best_match,
-        "confidence": {
-            "top1_score": round(top1, 5),
-            "level": confidence_label(top1),
-            "top1_top2_gap": round(gap, 5)
-        },
-        "topMatches": top,
-        "nextPhotos": next_photos_hint(best_match or "", gap),
-        "meta": {
-            "project": plantnet.get("query", {}).get("project", project),
-            "organs": plantnet.get("query", {}).get("organs", [organs]),
-            "language": plantnet.get("language")
-        }
+    # Form mezők PlantNet felé
+    data = {
+        "organs": organs,  # requests kezeli listaként is (organs=leaf&organs=flower...)
+        "language": language,
+        "includeRelatedImages": str(includeRelatedImages).lower(),
+        "noReject": str(noReject).lower(),
     }
-class IdentifyBase64Request(BaseModel):
-    image_base64: str
-    organs: str = "leaf"
-    project: str = "all"
-    top_k: int = 3
 
-@app.post("/identify_base64")
-def identify_base64(payload: IdentifyBase64Request):
-    api_key = os.getenv("PLANTNET_API_KEY", "").strip()
-    if not api_key:
-        raise HTTPException(status_code=500, detail="PLANTNET_API_KEY nincs beállítva a szerveren.")
-
-    # Base64 dekódolás
+    # 4) Meghívjuk a PlantNet-et
     try:
-        b64 = payload.image_base64
-        if "," in b64:
-            # ha data URL formában jön (data:image/jpeg;base64,....) akkor levágjuk a fejlécet
-            b64 = b64.split(",", 1)[1]
-        image_bytes = base64.b64decode(b64)
+        r = requests.post(
+            PLANTNET_IDENTIFY_URL,
+            params=params,
+            data=data,
+            files=files,
+            timeout=60,
+        )
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"PlantNet hálózati hiba: {e}")
+
+    # 5) Hibakezelés PlantNet válasznál
+    if r.status_code == 401 or r.status_code == 403:
+        raise HTTPException(
+            status_code=502,
+            detail=f"PlantNet jogosultsági hiba ({r.status_code}). Ellenőrizd az API kulcsot / korlátozásokat.",
+        )
+
+    if r.status_code >= 400:
+        # PlantNet gyakran JSON-ben ad hibát
+        try:
+            err_json = r.json()
+        except Exception:
+            err_json = {"raw": r.text}
+        raise HTTPException(
+            status_code=502,
+            detail={"plantnet_status": r.status_code, "plantnet_error": err_json},
+        )
+
+    # 6) Sikeres válasz feldolgozása
+    try:
+        out = r.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="Hibás image_base64 formátum.")
+        raise HTTPException(status_code=502, detail="PlantNet nem JSON választ adott (váratlan).")
 
-    # Pl@ntNet hívás (ugyanúgy, mint a fájlfeltöltésnél)
-    url = f"https://my-api.plantnet.org/v2/identify/{payload.project}"
-    params = {"api-key": api_key}
-    files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
-    data = {"organs": payload.organs}
+    # Egyszerűsített válasz a GPT-nek (top3 + confidence)
+    results = out.get("results", []) or []
+    top = results[:3]
 
-    try:
-        r = requests.post(url, params=params, files=files, data=data, timeout=60)
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"PlantNet kapcsolat hiba: {str(e)}")
-
-    if r.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"PlantNet hiba: {r.text}")
-
-    plantnet = r.json()
-    results = plantnet.get("results") or []
-    best_match = plantnet.get("bestMatch")
-
-    # Rövid válasz
-    top = []
-    for item in results[: payload.top_k]:
+    def _pick_common_names(item):
         sp = (item.get("species") or {})
-        top.append({
-            "score": float(item.get("score") or 0.0),
-            "scientificName": sp.get("scientificName") or sp.get("scientificNameWithoutAuthor"),
-            "family": (sp.get("family") or {}).get("scientificNameWithoutAuthor"),
-            "commonNames": sp.get("commonNames") or [],
-        })
+        return sp.get("commonNames") or []
 
-    top1 = float(results[0].get("score") or 0.0) if len(results) >= 1 else 0.0
+    def _pick_family(item):
+        sp = (item.get("species") or {})
+        fam = sp.get("family") or {}
+        return fam.get("scientificNameWithoutAuthor") or fam.get("scientificName") or None
 
-    return {
-        "bestMatch": best_match,
-        "confidence": {"top1_score": top1},
-        "topMatches": top,
-        "meta": {"project": payload.project, "organs": [payload.organs], "language": plantnet.get("language")}
-    }
+    simplified_top = []
+    for item in top:
+        sp = item.get("species") or {}
+        simplified_top.append(
+            {
+                "score": item.get("score"),
+                "scientificName": sp.get("scientificName"),
+                "scientificNameWithoutAuthor": sp.get("scientificNameWithoutAuthor"),
+                "family": _pick_family(item),
+                "commonNames": _pick_common_names(item),
+            }
+        )
 
-    if raw:
-        response["raw"] = plantnet
+    top1 = simplified_top[0]["score"] if len(simplified_top) > 0 else None
+    top2 = simplified_top[1]["score"] if len(simplified_top) > 1 else None
+    gap = (top1 - top2) if (top1 is not None and top2 is not None) else None
 
-    return response
+    # egyszerű "bizalom" szint
+    level = "alacsony"
+    if top1 is not None:
+        if top1 >= 0.7:
+            level = "magas"
+        elif top1 >= 0.4:
+            level = "közepes"
+        else:
+            level = "alacsony"
+
+    best_match = out.get("bestMatch")
+    if not best_match and simplified_top:
+        best_match = simplified_top[0].get("scientificName")
+
+    return JSONResponse(
+        {
+            "bestMatch": best_match,
+            "confidence": {
+                "top1_score": top1,
+                "level": level,
+                "top1_top2_gap": gap,
+            },
+            "topMatches": simplified_top,
+            "meta": {
+                "organs": organs,
+                "language": language,
+            },
+            "raw": out,  # ha nem kell, később kivehetjük
+        }
+    )
