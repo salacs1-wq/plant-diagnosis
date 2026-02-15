@@ -1,65 +1,73 @@
 import os
+import io
+import base64
 import mimetypes
 import requests
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, HttpUrl
 
 app = FastAPI()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
-PLANTNET_URL = "https://my-api.plantnet.org/v2/identify/all"
+PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()  # pl. "all" vagy "weurope"
+PLANTNET_ENDPOINT = f"https://my-api.plantnet.org/v2/identify/{PLANTNET_PROJECT}"
+
+if not PLANTNET_API_KEY:
+    print("WARNING: PLANTNET_API_KEY is missing!")
+
+class IdentifyUrlRequest(BaseModel):
+    image_url: HttpUrl
+    organs: str = "leaf"
+
+def call_plantnet(image_bytes: bytes, filename: str, organs: str):
+    if not PLANTNET_API_KEY:
+        raise HTTPException(status_code=500, detail="PLANTNET_API_KEY missing on server")
+
+    # content-type tippelés
+    ctype, _ = mimetypes.guess_type(filename)
+    if not ctype:
+        ctype = "image/jpeg"
+
+    files = {
+        "images": (filename, image_bytes, ctype)
+    }
+    data = {
+        "organs": organs
+    }
+    params = {
+        "api-key": PLANTNET_API_KEY
+    }
+
+    r = requests.post(PLANTNET_ENDPOINT, params=params, files=files, data=data, timeout=60)
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+
+    return r.json()
 
 @app.get("/")
 def health():
-    return {"status": "ok", "message": "plant-diagnosis running"}
+    return {"status": "ok", "message": "Plant diagnosis API is running"}
 
-def _guess_content_type(filename: str) -> str:
-    ct, _ = mimetypes.guess_type(filename or "")
-    return ct or "application/octet-stream"
-
+# 1) Hoppscotch / klasszikus multipart (ez nálad már működik)
 @app.post("/identify")
-async def identify(
-    # A GPT action jellemzően "image"-et küld, Hoppscotch sokszor szintén.
-    image: UploadFile | None = File(default=None),
-    # Biztonság kedvéért: ha valaki "images" néven küldi (többes), azt is fogadjuk.
-    images: UploadFile | None = File(default=None),
-    organs: str = Form("leaf"),
-):
-    if not PLANTNET_API_KEY:
-        raise HTTPException(status_code=500, detail="Missing PLANTNET_API_KEY env var")
+async def identify_plant(image: UploadFile = File(...), organs: str = Form("leaf")):
+    img_bytes = await image.read()
+    result = call_plantnet(img_bytes, image.filename or "image.jpg", organs)
+    return JSONResponse(result)
 
-    file_obj = image or images
-    if file_obj is None:
-        # Ne hívjuk a PlantNet-et kép nélkül, mert úgyis 400-at ad.
-        raise HTTPException(status_code=400, detail="Missing file field: image")
-
-    content = await file_obj.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty image file")
-
-    ct = file_obj.content_type or _guess_content_type(file_obj.filename)
-
-    # PlantNet felé KÖTELEZŐEN 'images' néven küldjük (többes!)
-    files = {
-        "images": (file_obj.filename or "image.jpg", content, ct)
-    }
-    data = {
-        "organs": organs or "leaf"
-    }
-
-    url = f"{PLANTNET_URL}?api-key={PLANTNET_API_KEY}"
-
+# 2) GPT Actions / JSON + publikus URL (ez kell a GPT-hez)
+@app.post("/identify_url")
+def identify_plant_by_url(payload: IdentifyUrlRequest):
     try:
-        r = requests.post(url, files=files, data=data, timeout=60)
-        # Ha PlantNet hibázik, add vissza a teljes body-t (sokat segít debuggolni)
-        if r.status_code >= 400:
-            return JSONResponse(
-                status_code=r.status_code,
-                content={
-                    "plantnet_status": r.status_code,
-                    "plantnet_error": r.text,
-                },
-            )
-        return r.json()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"PlantNet request failed: {str(e)}")
+        img_resp = requests.get(str(payload.image_url), timeout=30)
+        img_resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not download image_url: {e}")
+
+    # fájlnév próbálgatás
+    filename = os.path.basename(str(payload.image_url)) or "image.jpg"
+    img_bytes = img_resp.content
+
+    result = call_plantnet(img_bytes, filename, payload.organs)
+    return JSONResponse(result)
