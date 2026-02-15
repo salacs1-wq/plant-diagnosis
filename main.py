@@ -1,20 +1,21 @@
+# main.py
 import os
-from typing import List, Optional
-from io import BytesIO
+from typing import Optional
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, Response
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
+
+# My Pl@ntNet API endpoint
 PLANTNET_IDENTIFY_URL = "https://my-api.plantnet.org/v2/identify/all"
 
 app = FastAPI(
     title="Plant Diagnosis API (PlantNet proxy)",
-    version="2.0.0",
-    description="PlantNet alapú növényazonosítás GPT Actions kompatibilis formátumban.",
+    version="1.0.0",
+    description="PlantNet alapú növényazonosítás kép-feltöltéssel (proxy).",
 )
 
 app.add_middleware(
@@ -25,53 +26,54 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 def health():
     return {"status": "ok", "message": "Növénydiagnosztikai API fut"}
 
 
-# -------- GPT ACTIONS REQUEST MODEL --------
+# Render / böngésző gyakran HEAD-et küld
+@app.head("/")
+def health_head():
+    return Response(status_code=200)
 
-class FileRef(BaseModel):
-    download_link: str
 
-class IdentifyRequest(BaseModel):
-    openaiFileIdRefs: List[FileRef]
-    organs: Optional[List[str]] = ["leaf"]
+# böngésző /monitor kérheti
+@app.get("/favicon.ico")
+def favicon():
+    return Response(status_code=204)
 
 
 @app.post("/identify")
-def identify(req: IdentifyRequest):
+async def identify(
+    # GPT Actions ezt a mezőnevet adja: "image"
+    image: UploadFile = File(..., description="A feltöltött kép (JPG/PNG)."),
+    # egyszerű string: leaf/flower/fruit/bark...
+    organs: str = Form(default="leaf", description="Pl.: leaf, flower, fruit, bark"),
+):
     if not PLANTNET_API_KEY:
         raise HTTPException(
             status_code=500,
-            detail="Hiányzik a PLANTNET_API_KEY környezeti változó."
+            detail="Hiányzik a PLANTNET_API_KEY környezeti változó a Renderen.",
         )
 
-    if not req.openaiFileIdRefs:
-        raise HTTPException(status_code=400, detail="Nincs feltöltött kép.")
-
-    image_url = req.openaiFileIdRefs[0].download_link
-
     try:
-        img_response = requests.get(image_url, timeout=30)
-        img_response.raise_for_status()
+        img_bytes = await image.read()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Kép letöltési hiba: {e}")
+        raise HTTPException(status_code=400, detail=f"Nem tudtam beolvasni a képfájlt: {e}")
 
-    img_bytes = img_response.content
+    if not img_bytes or len(img_bytes) < 200:
+        raise HTTPException(status_code=400, detail="Üres vagy túl kicsi képfájl érkezett.")
 
+    # PlantNet: fájlnév "images" kulccsal
     files = {
-        "images": ("image.jpg", img_bytes, "image/jpeg")
+        "images": (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg")
     }
+
+    # Fontos: organs-t így küldjük, hogy biztosan "organs=leaf" legyen (ne "['leaf']")
+    data = [("organs", organs)]
 
     params = {"api-key": PLANTNET_API_KEY}
-
-    data = {
-        "organs": req.organs,
-        "includeRelatedImages": "false",
-        "noReject": "false",
-    }
 
     try:
         r = requests.post(
@@ -79,11 +81,19 @@ def identify(req: IdentifyRequest):
             params=params,
             data=data,
             files=files,
-            timeout=60,
+            timeout=90,
         )
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"PlantNet hálózati hiba: {e}")
 
+    # PlantNet auth hibák
+    if r.status_code in (401, 403):
+        raise HTTPException(
+            status_code=502,
+            detail=f"PlantNet jogosultsági hiba ({r.status_code}). Ellenőrizd az API kulcsot / projekt jogosultságot.",
+        )
+
+    # PlantNet payload hibák
     if r.status_code >= 400:
         try:
             err_json = r.json()
@@ -94,29 +104,26 @@ def identify(req: IdentifyRequest):
             detail={"plantnet_status": r.status_code, "plantnet_error": err_json},
         )
 
-    out = r.json()
-    results = out.get("results", []) or []
+    # siker
+    try:
+        out = r.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="PlantNet nem JSON választ adott (váratlan).")
+
+    results = out.get("results") or []
     top = results[:3]
-
-    def pick_common_names(item):
-        sp = (item.get("species") or {})
-        return sp.get("commonNames") or []
-
-    def pick_family(item):
-        sp = (item.get("species") or {})
-        fam = sp.get("family") or {}
-        return fam.get("scientificNameWithoutAuthor") or fam.get("scientificName") or None
 
     simplified_top = []
     for item in top:
         sp = item.get("species") or {}
+        fam = sp.get("family") or {}
         simplified_top.append(
             {
                 "score": item.get("score"),
                 "scientificName": sp.get("scientificName"),
                 "scientificNameWithoutAuthor": sp.get("scientificNameWithoutAuthor"),
-                "family": pick_family(item),
-                "commonNames": pick_common_names(item),
+                "family": fam.get("scientificNameWithoutAuthor") or fam.get("scientificName"),
+                "commonNames": sp.get("commonNames") or [],
             }
         )
 
@@ -138,16 +145,9 @@ def identify(req: IdentifyRequest):
     return JSONResponse(
         {
             "bestMatch": best_match,
-            "confidence": {
-                "top1_score": top1,
-                "level": level,
-                "top1_top2_gap": gap,
-            },
+            "confidence": {"top1_score": top1, "level": level, "top1_top2_gap": gap},
             "topMatches": simplified_top,
-            "meta": {
-                "organs": req.organs,
-            },
+            "meta": {"organs": organs},
             "raw": out,
         }
     )
-
