@@ -3,10 +3,10 @@ import os
 import uuid
 import mimetypes
 from pathlib import Path
-from typing import Optional, Literal, Dict, Any, List
+from typing import Optional, Literal, Dict, Any
 
 import requests
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, HttpUrl
@@ -15,14 +15,18 @@ from pydantic import BaseModel, HttpUrl
 # Config
 # ----------------------------
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
-PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()  # "all" is ok
+PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()  # e.g. "all"
 PLANTNET_BASE = os.getenv("PLANTNET_BASE", "https://my-api.plantnet.org/v2/identify").rstrip("/")
 
-# Render: use a writable dir. /tmp is always writable, but ephemeral.
+# Render: /tmp writable
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+
+# Optional: set this in Render env for stable URL building
+# Example: https://plant-diagnosis-1.onrender.com
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
 # ----------------------------
 # App
@@ -31,13 +35,13 @@ app = FastAPI(title="Plant Diagnosis API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later if you want
+    allow_origins=["*"],  # tighten later if needed
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Serve uploaded files publicly at /files/<name>
+# Serve uploaded files publicly
 app.mount("/files", StaticFiles(directory=str(UPLOAD_DIR), html=False), name="files")
 
 
@@ -46,43 +50,48 @@ app.mount("/files", StaticFiles(directory=str(UPLOAD_DIR), html=False), name="fi
 # ----------------------------
 def _require_key():
     if not PLANTNET_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="Missing PLANTNET_API_KEY env var on the server."
-        )
+        raise HTTPException(status_code=500, detail="Missing PLANTNET_API_KEY env var on the server.")
+
 
 def _ext_from_upload(upload: UploadFile) -> str:
-    # Try filename ext
+    # Try filename ext first
     if upload.filename:
         ext = Path(upload.filename).suffix.lower()
         if ext in ALLOWED_EXT:
             return ext
+
     # Fallback from content type
     if upload.content_type:
         guess = mimetypes.guess_extension(upload.content_type)
         if guess and guess.lower() in ALLOWED_EXT:
             return guess.lower()
-    # Default
+
     return ".jpg"
 
-def _public_base_url(request_headers: Dict[str, str]) -> str:
+
+def _public_base_url_from_request(request: Request) -> str:
     """
-    On Render, requests come through https. We build base from forwarded headers.
+    Build base URL behind reverse proxy (Render).
+    Prefer PUBLIC_BASE_URL if set.
     """
-    proto = request_headers.get("x-forwarded-proto", "https")
-    host = request_headers.get("x-forwarded-host") or request_headers.get("host")
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
+
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    proto = headers.get("x-forwarded-proto", "https")
+    host = headers.get("x-forwarded-host") or headers.get("host")
     if not host:
-        # Fallback: Render service URL if you set it
-        fallback = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-        if fallback:
-            return fallback
         raise HTTPException(status_code=500, detail="Cannot determine public base URL (missing host headers).")
+
     return f"{proto}://{host}"
+
 
 def _plantnet_identify_from_bytes(image_bytes: bytes, filename: str, organs: str = "leaf") -> Dict[str, Any]:
     _require_key()
     url = f"{PLANTNET_BASE}/{PLANTNET_PROJECT}"
     params = {"api-key": PLANTNET_API_KEY}
+
+    # PlantNet expects "images" as multipart field name
     files = {"images": (filename, image_bytes)}
     data = {"organs": organs}
 
@@ -92,12 +101,17 @@ def _plantnet_identify_from_bytes(image_bytes: bytes, filename: str, organs: str
         raise HTTPException(status_code=502, detail=f"PlantNet upstream error: {e}")
 
     if r.status_code >= 400:
+        # keep upstream text for debugging
         raise HTTPException(status_code=r.status_code, detail=r.text)
 
     return r.json()
 
+
 def _normalize_plantnet(raw: Dict[str, Any]) -> Dict[str, Any]:
-    # PlantNet returns "results": [{score, species:{scientificName,...}}]
+    """
+    PlantNet returns:
+      raw["results"] = [{ "score":..., "species":{...}}]
+    """
     results = raw.get("results") or []
     top = results[0] if results else None
 
@@ -119,22 +133,19 @@ def _normalize_plantnet(raw: Dict[str, Any]) -> Dict[str, Any]:
         best_match = (top.get("species") or {}).get("scientificName")
         best_score = top.get("score")
 
-    # very simple confidence level
+    # simple confidence label
     level = "alacsony"
     if isinstance(best_score, (int, float)):
-        if best_score >= 0.7:
+        if best_score >= 0.70:
             level = "magas"
         elif best_score >= 0.45:
             level = "kozepes"
 
     return {
         "bestMatch": best_match,
-        "confidence": {
-            "top1_score": best_score,
-            "level": level
-        },
+        "confidence": {"top1_score": best_score, "level": level},
         "topMatches": top_matches,
-        "raw": raw,  # keep full response for debugging
+        "raw": raw,  # passthrough for debugging
     }
 
 
@@ -153,34 +164,29 @@ class IdentifyByUrlIn(BaseModel):
 def health():
     return {"status": "ok", "message": "Plant Diagnosis API running"}
 
+
 @app.post("/upload")
-async def upload_image(image: UploadFile = File(...)):
+async def upload_image(request: Request, image: UploadFile = File(...)):
     """
-    Upload a file and get a PUBLIC URL back.
-    This is the missing piece for GPT Actions: it cannot send /mnt/data paths to PlantNet,
-    so we host the file at /files/<name>.
+    Upload image and return a PUBLIC URL: /files/<uuid>.jpg
+    This is the reliable path for GPT Actions.
     """
     if not image:
         raise HTTPException(status_code=400, detail="Missing file field: image")
-
-    ext = _ext_from_upload(image)
-    name = f"{uuid.uuid4().hex}{ext}"
-    dest = UPLOAD_DIR / name
 
     content = await image.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file.")
 
+    ext = _ext_from_upload(image)
+    name = f"{uuid.uuid4().hex}{ext}"
+    dest = UPLOAD_DIR / name
     dest.write_bytes(content)
 
-    base = _public_base_url({k.lower(): v for k, v in image.headers.items()})  # headers on UploadFile may be limited
-    # Better: use environment if set
-    env_base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-    if env_base:
-        base = env_base
-
+    base = _public_base_url_from_request(request)
     url = f"{base}/files/{name}"
     return {"url": url, "filename": name, "contentType": image.content_type}
+
 
 @app.post("/identify")
 async def identify_from_upload(
@@ -189,8 +195,7 @@ async def identify_from_upload(
 ):
     """
     Direct identify from uploaded file (works from Hoppscotch/Postman).
-    GPT Actions *may* fail to pass binary properly depending on schema/UI,
-    so /upload + /identify_url is the reliable path.
+    GPT Actions sometimes fails to send binary reliably, use /upload + /identify_url.
     """
     if not image:
         raise HTTPException(status_code=400, detail="Missing file field: image")
@@ -202,20 +207,22 @@ async def identify_from_upload(
     raw = _plantnet_identify_from_bytes(img_bytes, image.filename or "image.jpg", organs=organs)
     return _normalize_plantnet(raw)
 
+
 @app.post("/identify_url")
 def identify_by_url(payload: IdentifyByUrlIn):
     """
     Identify by PUBLIC URL:
-    1) GPT calls /upload -> gets https://.../files/<id>.jpg
-    2) GPT calls /identify_url with that URL
+      1) call /upload -> get https://.../files/<id>.jpg
+      2) call /identify_url with that URL
     """
     _require_key()
+
     try:
-        img = requests.get(str(payload.image_url), timeout=30)
-        img.raise_for_status()
+        resp = requests.get(str(payload.image_url), timeout=30)
+        resp.raise_for_status()
     except requests.RequestException as e:
         raise HTTPException(status_code=400, detail=f"Could not fetch image_url: {e}")
 
     filename = Path(str(payload.image_url)).name or "image.jpg"
-    raw = _plantnet_identify_from_bytes(img.content, filename, organs=payload.organs or "leaf")
+    raw = _plantnet_identify_from_bytes(resp.content, filename, organs=payload.organs or "leaf")
     return _normalize_plantnet(raw)
