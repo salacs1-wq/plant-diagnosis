@@ -115,7 +115,7 @@ def _plantnet_identify_from_bytes(image_bytes: bytes, filename: str, organs: str
     params = {"api-key": PLANTNET_API_KEY}
 
     # PlantNet expects 'images' and 'organs'
-    files = {"images": (filename, image_bytes)}
+    files = {"images": (filename, image_bytes, "image/jpeg")}
     data = {"organs": organs}
 
     try:
