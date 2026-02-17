@@ -5,7 +5,6 @@ import uuid
 import base64
 import binascii
 import mimetypes
-import imghdr
 from pathlib import Path
 from typing import Optional, Literal, Dict, Any
 
