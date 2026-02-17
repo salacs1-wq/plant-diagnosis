@@ -56,6 +56,27 @@ def _decode_base64_image(data: str) -> bytes:
     """
     Accepts:
     - pure base64
+    - data URLs
+    - GPT shortened base64 blobs
+    """
+    if not data:
+        raise HTTPException(status_code=400, detail="image_base64 is empty.")
+
+    # data URL kezelés
+    if "," in data and data.strip().lower().startswith("data:"):
+        data = data.split(",", 1)[1]
+
+    # whitespace törlés
+    data = data.strip().replace("\n", "").replace("\r", "")
+
+    try:
+        return base64.b64decode(data + "===")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 image.")
+
+    """
+    Accepts:
+    - pure base64
     - data URL: data:image/jpeg;base64,....
     Also tolerates missing padding and whitespace/newlines.
     """
