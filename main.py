@@ -1,16 +1,12 @@
-# main.py
 import os
-import uuid
 import base64
 import mimetypes
-from pathlib import Path
 from typing import Optional, Literal, Dict, Any
 
 import requests
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 
 # ----------------------------
 # Config
@@ -19,15 +15,13 @@ PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
 PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()
 PLANTNET_BASE = os.getenv("PLANTNET_BASE", "https://my-api.plantnet.org/v2/identify").rstrip("/")
 
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/uploads"))
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
+ALLOWED_CT = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 
 # ----------------------------
 # App
 # ----------------------------
-app = FastAPI(title="Plant Diagnosis API", version="1.0.0")
+app = FastAPI(title="Plant Diagnosis API", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,8 +31,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/files", StaticFiles(directory=str(UPLOAD_DIR), html=False), name="files")
-
 # ----------------------------
 # Helpers
 # ----------------------------
@@ -46,32 +38,62 @@ def _require_key():
     if not PLANTNET_API_KEY:
         raise HTTPException(status_code=500, detail="Missing PLANTNET_API_KEY env var on the server.")
 
-def _public_base_url_from_request(req: Request) -> str:
-    # Render behind proxy
-    proto = req.headers.get("x-forwarded-proto", req.url.scheme) or "https"
-    host = req.headers.get("x-forwarded-host") or req.headers.get("host")
-    if not host:
-        fallback = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-        if fallback:
-            return fallback
-        raise HTTPException(status_code=500, detail="Cannot determine public base URL (missing host headers).")
-    return f"{proto}://{host}"
-
-def _guess_ext(filename: Optional[str], content_type: Optional[str]) -> str:
+def _safe_guess_filename(filename: Optional[str], content_type: Optional[str]) -> str:
+    # Prefer filename extension if allowed, otherwise guess from content-type, else default jpg
+    ext = ""
     if filename:
-        ext = Path(filename).suffix.lower()
-        if ext in ALLOWED_EXT:
-            return ext
-    if content_type:
-        guess = mimetypes.guess_extension(content_type)
-        if guess and guess.lower() in ALLOWED_EXT:
-            return guess.lower()
-    return ".jpg"
+        ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXT:
+        if content_type:
+            guessed = mimetypes.guess_extension(content_type)
+            if guessed and guessed.lower() in ALLOWED_EXT:
+                ext = guessed.lower()
+        if ext not in ALLOWED_EXT:
+            ext = ".jpg"
+    return f"image{ext}"
 
-def _plantnet_identify_from_bytes(image_bytes: bytes, filename: str, organs: str = "leaf") -> Dict[str, Any]:
+def _decode_base64_image(data: str) -> bytes:
+    """
+    Accepts:
+    - pure base64
+    - data URL: data:image/jpeg;base64,....
+    Also tolerates missing padding and whitespace/newlines.
+    """
+    if not data or not data.strip():
+        raise HTTPException(status_code=400, detail="image_base64 is empty.")
+
+    s = data.strip()
+
+    # If data URL, strip prefix
+    if s.lower().startswith("data:") and "," in s:
+        s = s.split(",", 1)[1].strip()
+
+    # Remove whitespace/newlines
+    s = "".join(s.split())
+
+    # Fix missing padding
+    pad = (-len(s)) % 4
+    if pad:
+        s += "=" * pad
+
+    # First try strict
+    try:
+        return base64.b64decode(s, validate=True)
+    except Exception:
+        # Fallback relaxed
+        try:
+            return base64.b64decode(s)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 image.")
+
+def _plantnet_identify_from_bytes(image_bytes: bytes, filename: str, organs: str) -> Dict[str, Any]:
     _require_key()
+
+    # PlantNet endpoint: /v2/identify/{project}?api-key=...
     url = f"{PLANTNET_BASE}/{PLANTNET_PROJECT}"
     params = {"api-key": PLANTNET_API_KEY}
+
+    # PlantNet expects 'images' and 'organs'
     files = {"images": (filename, image_bytes)}
     data = {"organs": organs}
 
@@ -81,6 +103,7 @@ def _plantnet_identify_from_bytes(image_bytes: bytes, filename: str, organs: str
         raise HTTPException(status_code=502, detail=f"PlantNet upstream error: {e}")
 
     if r.status_code >= 400:
+        # This is IMPORTANT for debugging: return PlantNet body
         raise HTTPException(status_code=502, detail=f"PlantNet error: {r.status_code} {r.text}")
 
     return r.json()
@@ -121,67 +144,20 @@ def _normalize_plantnet(raw: Dict[str, Any]) -> Dict[str, Any]:
         "raw": raw,
     }
 
-def _decode_base64_image(data: str) -> bytes:
-    """
-    Accepts either:
-    - pure base64
-    - data URL: data:image/jpeg;base64,....
-    """
-    if not data:
-        raise HTTPException(status_code=400, detail="image_base64 is empty.")
-
-    # data URL kezelése
-    if "," in data and data.strip().lower().startswith("data:"):
-        data = data.split(",", 1)[1]
-
-    # whitespace és sortörések eltávolítása
-    data = data.strip().replace("\n", "").replace("\r", "")
-
-    try:
-        return base64.b64decode(data)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64 image.")
-
-    """
-    Accepts either:
-    - pure base64
-    - data URL: data:image/jpeg;base64,....
-    """
-    if not data:
-        raise HTTPException(status_code=400, detail="image_base64 is empty.")
-    if "," in data and data.strip().lower().startswith("data:"):
-        data = data.split(",", 1)[1]
-    try:
-        return base64.b64decode(data, validate=True)
-    except Exception:
-        # Some encoders include newlines; try relaxed decode
-        try:
-            return base64.b64decode(data)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid base64 image.")
-
 # ----------------------------
 # Schemas
 # ----------------------------
-class UploadB64In(BaseModel):
-    image_base64: str
-    filename: Optional[str] = None
-    contentType: Optional[str] = None
-
-class UploadOut(BaseModel):
-    url: str
-    filename: str
-    contentType: Optional[str] = None
-
-class IdentifyByUrlIn(BaseModel):
-    image_url: HttpUrl
-    organs: Optional[Literal["leaf", "flower", "fruit", "bark"]] = "leaf"
-
 class IdentifyB64In(BaseModel):
     image_base64: str
     filename: Optional[str] = None
     contentType: Optional[str] = None
     organs: Optional[Literal["leaf", "flower", "fruit", "bark"]] = "leaf"
+
+class IdentifyOut(BaseModel):
+    bestMatch: Optional[str] = None
+    confidence: Dict[str, Any]
+    topMatches: list
+    raw: Dict[str, Any]
 
 # ----------------------------
 # Routes
@@ -190,71 +166,17 @@ class IdentifyB64In(BaseModel):
 def health():
     return {"status": "ok", "message": "Plant Diagnosis API running"}
 
-# Kept for Postman/Hoppscotch/manual tests (multipart) – may fail from GPT Actions UI
-@app.post("/upload")
-async def upload_image(request: Request, image: UploadFile = File(...)):
-    if not image:
-        raise HTTPException(status_code=400, detail="Missing file field: image")
-
-    content = await image.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file.")
-
-    ext = _guess_ext(image.filename, image.content_type)
-    name = f"{uuid.uuid4().hex}{ext}"
-    dest = UPLOAD_DIR / name
-    dest.write_bytes(content)
-
-    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") or _public_base_url_from_request(request)
-    url = f"{base}/files/{name}"
-    return {"url": url, "filename": name, "contentType": image.content_type}
-
-# THIS is the reliable upload for GPT Actions: JSON base64
-@app.post("/upload_b64", response_model=UploadOut)
-async def upload_image_b64(request: Request, payload: UploadB64In):
+@app.post("/identify_b64", response_model=IdentifyOut)
+def identify_b64(payload: IdentifyB64In):
     img_bytes = _decode_base64_image(payload.image_base64)
 
-    ext = _guess_ext(payload.filename, payload.contentType)
-    name = f"{uuid.uuid4().hex}{ext}"
-    dest = UPLOAD_DIR / name
-    dest.write_bytes(img_bytes)
+    # contentType check (optional, but helps catch garbage)
+    if payload.contentType and payload.contentType.lower() not in ALLOWED_CT:
+        # DON'T hard-fail here: phones sometimes lie; only warn by continuing
+        pass
 
-    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") or _public_base_url_from_request(request)
-    url = f"{base}/files/{name}"
-    return {"url": url, "filename": name, "contentType": payload.contentType}
+    filename = _safe_guess_filename(payload.filename, payload.contentType)
+    organs = payload.organs or "leaf"
 
-@app.post("/identify")
-async def identify_from_upload(
-    image: UploadFile = File(...),
-    organs: str = Form("leaf"),
-):
-    if not image:
-        raise HTTPException(status_code=400, detail="Missing file field: image")
-
-    img_bytes = await image.read()
-    if not img_bytes:
-        raise HTTPException(status_code=400, detail="Empty file.")
-
-    raw = _plantnet_identify_from_bytes(img_bytes, image.filename or "image.jpg", organs=organs)
-    return _normalize_plantnet(raw)
-
-# Reliable identify directly from base64 JSON (no upload step needed)
-@app.post("/identify_b64")
-async def identify_b64(payload: IdentifyB64In):
-    img_bytes = _decode_base64_image(payload.image_base64)
-    filename = payload.filename or "image.jpg"
-    raw = _plantnet_identify_from_bytes(img_bytes, filename, organs=payload.organs or "leaf")
-    return _normalize_plantnet(raw)
-
-@app.post("/identify_url")
-def identify_by_url(payload: IdentifyByUrlIn):
-    _require_key()
-    try:
-        img = requests.get(str(payload.image_url), timeout=30)
-        img.raise_for_status()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=400, detail=f"Could not fetch image_url: {e}")
-
-    filename = Path(str(payload.image_url)).name or "image.jpg"
-    raw = _plantnet_identify_from_bytes(img.content, filename, organs=payload.organs or "leaf")
+    raw = _plantnet_identify_from_bytes(img_bytes, filename, organs=organs)
     return _normalize_plantnet(raw)
