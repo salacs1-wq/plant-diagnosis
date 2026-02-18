@@ -8,7 +8,8 @@ import requests
 app = FastAPI(title="Plant Diagnosis API")
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY")
-PLANTNET_URL = "https://my-api.plantnet.org/v2/identify/all"
+PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope")
+PLANTNET_URL = f"https://my-api.plantnet.org/v2/identify/{PLANTNET_PROJECT}"
 
 
 # -----------------------------
