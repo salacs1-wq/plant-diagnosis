@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: plantnet-proxy
+    name: plant-diagnosis-1
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
