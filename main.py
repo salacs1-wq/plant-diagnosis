@@ -7,14 +7,11 @@ import requests
 
 app = FastAPI(title="Plant Diagnosis API")
 
-PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY")
-PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope")
-PLANTNET_URL = f"https://my-api.plantnet.org/v2/identify/{PLANTNET_PROJECT}"
+PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
+PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()
+PLANTNET_BASE = "https://my-api.plantnet.org/v2/identify"
 
 
-# -----------------------------
-# Adatmodell
-# -----------------------------
 class IdentifyRequest(BaseModel):
     image_base64: str
     filename: str = "image.jpg"
@@ -22,37 +19,38 @@ class IdentifyRequest(BaseModel):
     organs: str = "leaf"
 
 
-# -----------------------------
-# Base64 dekódoló (erősített)
-# -----------------------------
+def _sniff_mime(img: bytes) -> str:
+    # JPEG
+    if img[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    # PNG
+    if img[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    # WEBP: RIFF....WEBP
+    if img[:4] == b"RIFF" and img[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
 def decode_base64_image(data: str) -> bytes:
-    """
-    Elfogad:
-    - tiszta base64-et
-    - data:image/jpeg;base64,... formátumot
-    Javít:
-    - whitespace
-    - urlsafe base64
-    - padding
-    """
     if not data or not isinstance(data, str):
         raise HTTPException(status_code=400, detail="image_base64 missing or invalid")
 
     s = data.strip()
 
-    # data URL előtag levágása
+    # data URL levágása
     if s.lower().startswith("data:"):
         if "," not in s:
-            raise HTTPException(status_code=400, detail="Invalid data URL")
+            raise HTTPException(status_code=400, detail="Invalid data URL (missing comma)")
         s = s.split(",", 1)[1]
 
     # whitespace törlés
     s = re.sub(r"\s+", "", s)
 
-    # urlsafe javítás
+    # urlsafe -> standard
     s = s.replace("-", "+").replace("_", "/")
 
-    # padding
+    # padding javítás
     pad = (-len(s)) % 4
     if pad:
         s += "=" * pad
@@ -63,70 +61,43 @@ def decode_base64_image(data: str) -> bytes:
         raise HTTPException(status_code=400, detail="Invalid base64 image")
 
 
-# -----------------------------
-# Health check
-# -----------------------------
 @app.get("/")
 def health():
     return {"status": "ok"}
 
 
-# -----------------------------
-# PlantNet azonosítás
-# -----------------------------
 @app.post("/identify_b64")
 def identify_plant(req: IdentifyRequest):
     if not PLANTNET_API_KEY:
         raise HTTPException(status_code=500, detail="Missing PLANTNET_API_KEY")
 
-    image_bytes = decode_base64_image(req.image_base64)
+    img_bytes = decode_base64_image(req.image_base64)
 
-    files = {
-        "images": (req.filename, image_bytes, req.contentType)
-    }
+    mime = _sniff_mime(img_bytes)
+    if mime not in ("image/jpeg", "image/png", "image/webp"):
+        raise HTTPException(status_code=400, detail=f"Unsupported decoded image type: {mime}")
 
-    data = {
-        "organs": req.organs
-    }
+    # filename kiterjesztés igazítása
+    if mime == "image/jpeg":
+        filename = "image.jpg"
+    elif mime == "image/png":
+        filename = "image.png"
+    else:
+        filename = "image.webp"
+
+    url = f"{PLANTNET_BASE}/{PLANTNET_PROJECT}"
+    params = {"api-key": PLANTNET_API_KEY}
+
+    files = {"images": (filename, img_bytes, mime)}
+    data = {"organs": req.organs or "leaf"}
 
     try:
-        response = requests.post(
-            f"{PLANTNET_URL}?api-key={PLANTNET_API_KEY}",
-            files=files,
-            data=data,
-            timeout=30,
-        )
+        resp = requests.post(url, params=params, files=files, data=data, timeout=60)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PlantNet connection error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"PlantNet connection error: {str(e)}")
 
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=500,
-            detail=f"PlantNet error: {response.status_code} {response.text}"
-        )
+    if resp.status_code >= 400:
+        # ezt nagyon fontos visszaadni, mert ebből látjuk mi a PlantNet baja
+        raise HTTPException(status_code=502, detail=f"PlantNet error: {resp.status_code} {resp.text}")
 
-    result = response.json()
-
-    if not result.get("results"):
-        return {
-            "bestMatch": None,
-            "confidence": None,
-            "topMatches": []
-        }
-
-    top = result["results"][0]
-
-    return {
-        "bestMatch": top["species"]["scientificNameWithoutAuthor"],
-        "confidence": {
-            "top1_score": top["score"],
-            "level": "species"
-        },
-        "topMatches": [
-            {
-                "name": r["species"]["scientificNameWithoutAuthor"],
-                "score": r["score"]
-            }
-            for r in result["results"][:5]
-        ]
-    }
+    return resp.json()
