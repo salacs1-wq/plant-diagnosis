@@ -1,145 +1,39 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel
-import os
-import base64
-import re
-import requests
+import osimport base64import refrom typing import Optional, Tuple, Any, Dict, List
+import requestsfrom fastapi import FastAPI, UploadFile, File, Form, HTTPExceptionfrom fastapi.middleware.cors import CORSMiddlewarefrom pydantic import BaseModel, Field
+# ===== Config =====PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip() # e.g. "all"PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").strip()
+# PlantNet v2 identify endpoint (single-species)# Docs: /v2/identify/{project}PLANTNET_IDENTIFY_URL = f"{PLANTNET_BASE_URL}/v2/identify/{PLANTNET_PROJECT}"
+ALLOWED_CT = {"image/jpeg", "image/png", "image/webp"}
+app = FastAPI(title="Növénydiagnosztikai API", version="1.0.0")
+app.add_middleware(    CORSMiddleware,    allow_origins=["*"],    allow_credentials=False,    allow_methods=["*"],    allow_headers=["*"],)
 
-app = FastAPI(title="Plant Diagnosis API")
+# ===== Models =====class IdentifyB64Request(BaseModel):    image_base64: str = Field(..., description="Raw base64, data URL, vagy /mnt/data/... fájlútvonal")    organs: str = Field("leaf", description="leaf/flower/fruit/bark/auto")
 
-PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY")
-PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all")  # pl. "weurope" vagy "all"
+def _strip_data_url(s: str) -> Tuple[Optional[str], str]:    """    Returns (mime, b64payload) if data URL, else (None, original)    """    m = re.match(r"^data:(image\/[a-zA-Z0-9\-\+\.]+);base64,(.+)$", s.strip())    if not m:        return None, s.strip()    return m.group(1).lower(), m.group(2)
 
+def _maybe_read_mnt_path(s: str) -> Optional[bytes]:    """    If Actions passes /mnt/data/... path as a string, read it.    """    s = s.strip()    if s.startswith("/mnt/") and os.path.exists(s) and os.path.isfile(s):        with open(s, "rb") as f:            return f.read()    return None
 
-class IdentifyRequest(BaseModel):
-    # FONTOS: a ChatGPT néha ide nem base64-et, hanem fájlutat ad (/mnt/data/xxx.jpg)
-    image_base64: str
-    filename: str = "image.jpg"
-    contentType: str = "image/jpeg"
-    organs: str = "leaf"
+def _decode_image_from_b64_or_path(image_base64_or_path: str) -> Tuple[bytes, str]:    """    Accept:      - /mnt/data/... path      - data URL      - raw base64    Returns: (bytes, mime_guess)    """    # 1) path?    b = _maybe_read_mnt_path(image_base64_or_path)    if b is not None:        # no reliable mime here; assume jpeg (ok for PlantNet if it can parse bytes)        return b, "image/jpeg"
+    # 2) data URL?    mime, payload = _strip_data_url(image_base64_or_path)    if mime is None:        mime = "image/jpeg"
+    # 3) raw base64 decode    try:        raw = base64.b64decode(payload, validate=True)    except Exception:        # Some base64 strings include whitespace/newlines; try forgiving decode        try:            raw = base64.b64decode(payload)        except Exception as e:            raise HTTPException(status_code=422, detail=f"Nem érvényes base64 (vagy fájlútvonal): {e}")
+    return raw, mime
 
+def _call_plantnet(image_bytes: bytes, filename: str, content_type: str, organs: str) -> Dict[str, Any]:    if not PLANTNET_API_KEY:        raise HTTPException(status_code=502, detail="PLANTNET_API_KEY nincs beállítva a szerveren.")
+    # PlantNet expects multipart with images + organs, and api-key in query    params = {"api-key": PLANTNET_API_KEY}
+    # Use "images" field (PlantNet doc uses images array concept)    files = [        ("images", (filename, image_bytes, content_type)),    ]    data = [        ("organs", organs or "auto"),    ]
+    try:        r = requests.post(            PLANTNET_IDENTIFY_URL,            params=params,            files=files,            data=data,            timeout=60,        )    except Exception as e:        raise HTTPException(status_code=502, detail=f"PlantNet hívás sikertelen: {e}")
+    if r.status_code >= 400:        # forward a compact error        try:            j = r.json()        except Exception:            j = {"text": r.text[:1000]}        raise HTTPException(status_code=502, detail={"plantnet_status": r.status_code, "plantnet_error": j})
+    try:        return r.json()    except Exception as e:        raise HTTPException(status_code=502, detail=f"PlantNet válasz nem JSON: {e}")
 
-def _read_if_file_path(s: str) -> bytes | None:
-    """Ha s fájlút és létezik, visszaadja a fájl bájtjait, különben None."""
-    if not s:
-        return None
-    s2 = s.strip()
-    # tipikus ChatGPT Actions path: /mnt/data/.....
-    if (s2.startswith("/") or s2.startswith("mnt/")) and os.path.exists(s2):
-        with open(s2, "rb") as f:
-            return f.read()
-    return None
+def _simplify_plantnet_response(j: Dict[str, Any]) -> Dict[str, Any]:    """    PlantNet v2 returns: { results: [ { score, species: {...} }, ... ], ... }    We map to:      bestMatch: string      confidence: { top1_score, level }      topMatches: [{name, score}, ...]    """    results = j.get("results") or []    top_matches: List[Dict[str, Any]] = []
+    def _species_name(res: Dict[str, Any]) -> str:        sp = res.get("species") or {}        # try common keys        return (            sp.get("scientificNameWithoutAuthor")            or sp.get("scientificName")            or sp.get("commonNames", [None])[0]            or "Unknown"        )
+    for res in results[:5]:        name = _species_name(res)        score = res.get("score", 0.0)        top_matches.append({"name": name, "score": float(score)})
+    best = top_matches[0]["name"] if top_matches else "Unknown"    top1 = float(top_matches[0]["score"]) if top_matches else 0.0
+    return {        "bestMatch": best,        "confidence": {"top1_score": top1, "level": "species"},        "topMatches": top_matches,    }
 
+@app.get("/health")def health_get():    return {"status": "ok"}
 
-def decode_base64_image(data: str) -> bytes:
-    """
-    Elfogad:
-    - tiszta base64
-    - data URL (data:image/jpeg;base64,...)
-    - fájlút (pl. /mnt/data/xxx.jpg)  <-- EZ oldja meg a mostani hibádat
-    Javít:
-    - whitespace
-    - urlsafe base64
-    - padding
-    """
-    if not data or not isinstance(data, str):
-        raise HTTPException(status_code=400, detail="image_base64 missing or invalid")
+@app.post("/identify")async def identify_plant(    image: UploadFile = File(...),    organs: str = Form("leaf"),):    if image.content_type not in ALLOWED_CT:        raise HTTPException(            status_code=415,            detail=f"Unsupported file type: {image.content_type}. Allowed: {sorted(ALLOWED_CT)}",        )
+    image_bytes = await image.read()    if not image_bytes:        raise HTTPException(status_code=422, detail="Üres fájl.")
+    plantnet_json = _call_plantnet(        image_bytes=image_bytes,        filename=image.filename or "image.jpg",        content_type=image.content_type or "image/jpeg",        organs=organs or "auto",    )    return _simplify_plantnet_response(plantnet_json)
 
-    # 1) ha fájlút, olvassuk be
-    file_bytes = _read_if_file_path(data)
-    if file_bytes is not None:
-        return file_bytes
-
-    s = data.strip()
-
-    # 2) data URL előtag levágása
-    if s.lower().startswith("data:"):
-        if "," not in s:
-            raise HTTPException(status_code=400, detail="Invalid data URL")
-        s = s.split(",", 1)[1]
-
-    # whitespace törlés
-    s = re.sub(r"\s+", "", s)
-
-    # urlsafe javítás
-    s = s.replace("-", "+").replace("_", "/")
-
-    # padding
-    pad = (-len(s)) % 4
-    if pad:
-        s += "=" * pad
-
-    try:
-        return base64.b64decode(s, validate=False)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64 image")
-
-
-def plantnet_identify(image_bytes: bytes, filename: str, content_type: str, organs: str):
-    if not PLANTNET_API_KEY:
-        raise HTTPException(status_code=500, detail="Missing PLANTNET_API_KEY")
-
-    url = f"https://my-api.plantnet.org/v2/identify/{PLANTNET_PROJECT}"
-    params = {"api-key": PLANTNET_API_KEY}
-
-    files = {"images": (filename, image_bytes, content_type)}
-    data = {"organs": organs or "leaf"}
-
-    try:
-        r = requests.post(url, params=params, files=files, data=data, timeout=45)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"PlantNet connection error: {str(e)}")
-
-    # PlantNet hibákat adjuk vissza olvashatóan
-    if r.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=f"PlantNet error: {r.status_code} {r.text}"
-        )
-
-    result = r.json()
-
-    if not result.get("results"):
-        return {"bestMatch": None, "confidence": None, "topMatches": []}
-
-    top = result["results"][0]
-    top_matches = []
-    for x in result["results"][:5]:
-        top_matches.append({
-            "name": x["species"]["scientificNameWithoutAuthor"],
-            "score": x["score"]
-        })
-
-    return {
-        "bestMatch": top["species"]["scientificNameWithoutAuthor"],
-        "confidence": {"top1_score": top["score"], "level": "species"},
-        "topMatches": top_matches
-    }
-
-
-@app.get("/")
-def health():
-    return {"status": "ok"}
-
-
-# 1) MULTIPART (ez a legjobb képfeltöltéshez)
-@app.post("/identify")
-async def identify_plant_multipart(
-    image: UploadFile = File(...),
-    organs: str = Form("leaf"),
-):
-    image_bytes = await image.read()
-    if not image_bytes:
-        raise HTTPException(status_code=400, detail="Empty file")
-
-    content_type = image.content_type or "image/jpeg"
-    filename = image.filename or "image.jpg"
-
-    return plantnet_identify(image_bytes, filename, content_type, organs)
-
-
-# 2) BASE64/JSON (ÉS fájlút kompatibilis)
-@app.post("/identify_b64")
-def identify_plant_b64(req: IdentifyRequest):
-    image_bytes = decode_base64_image(req.image_base64)
-    return plantnet_identify(image_bytes, req.filename, req.contentType, req.organs)
+@app.post("/identify_b64")def identify_plant_b64(req: IdentifyB64Request):    img_bytes, mime = _decode_image_from_b64_or_path(req.image_base64)    plantnet_json = _call_plantnet(        image_bytes=img_bytes,        filename="image.jpg",        content_type=(mime if mime in ALLOWED_CT else "image/jpeg"),        organs=req.organs or "auto",    )    return _simplify_plantnet_response(plantnet_json)
