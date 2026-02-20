@@ -330,6 +330,7 @@ async def identifyDiseaseB64(
         )
 
     return _compact_disease_response(r.json())
+
 @app.post("/diagnose")
 async def diagnose(
     image: UploadFile = File(...),
@@ -349,7 +350,6 @@ async def diagnose(
 
     organs_list = _normalize_organs(organs)
 
-    # --- 1) Plant identify ---
     identify_url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     identify_params = _plantnet_params_with_organs(organs_list)
     identify_files = {
@@ -360,7 +360,6 @@ async def diagnose(
         )
     }
 
-    # --- 2) Disease identify ---
     disease_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     disease_params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
     disease_files = {
@@ -371,7 +370,6 @@ async def diagnose(
         )
     }
 
-    # Két külső hívás ugyanarra a képre (sorban: egyszerűbb hibakezelés)
     r1 = await _client(app).post(identify_url, params=identify_params, files=identify_files)
     if r1.status_code >= 400:
         raise HTTPException(
@@ -389,7 +387,6 @@ async def diagnose(
     plant_compact = _compact_species_response(r1.json())
     disease_compact = _compact_disease_response(r2.json())
 
-    # Egységes, GPT-barát “egyben” válasz
     return {
         "plant": plant_compact,
         "diseaseOrPest": disease_compact,
