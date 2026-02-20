@@ -1,7 +1,7 @@
 import osimport base64import refrom typing import Optional, Tuple, Any, Dict, List
 import requestsfrom fastapi import FastAPI, UploadFile, File, Form, HTTPExceptionfrom fastapi.middleware.cors import CORSMiddlewarefrom pydantic import BaseModel, Field
 # ===== Config =====PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip() # e.g. "all"PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").strip()
-# PlantNet v2 identify endpoint (single-species)# Docs: /v2/identify/{project}PLANTNET_IDENTIFY_URL = f"{PLANTNET_BASE_URL}/v2/identify/{PLANTNET_PROJECT}"
+# PlantNet v2 identify endpoint (single-species)# Docs: /v2/identify/{project}PLANTNET_IDENTIFY_URL = f"{PLANTNET_BASE_URL}/v2/identify"
 ALLOWED_CT = {"image/jpeg", "image/png", "image/webp"}
 app = FastAPI(title="Növénydiagnosztikai API", version="1.0.0")
 app.add_middleware(    CORSMiddleware,    allow_origins=["*"],    allow_credentials=False,    allow_methods=["*"],    allow_headers=["*"],)
