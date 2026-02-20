@@ -330,3 +330,75 @@ async def identifyDiseaseB64(
         )
 
     return _compact_disease_response(r.json())
+@app.post("/diagnose")
+async def diagnose(
+    image: UploadFile = File(...),
+    organs: str = Query("leaf", description="Pl. leaf/flower/fruit/bark (több is lehet: leaf,flower)"),
+    project: str = Query(default=PLANTNET_PROJECT, description="PlantNet project, pl. weurope vagy all"),
+):
+    """
+    Kombinált terepi diagnózis:
+      1) /v2/identify/{project}  -> faj/szintű azonosítás (kompakt)
+      2) /v2/diseases/identify   -> betegség/kártevő jelöltek (kompakt)
+    """
+    _require_api_key()
+
+    img_bytes = await image.read()
+    if not img_bytes or len(img_bytes) < 50:
+        raise HTTPException(status_code=422, detail="A feltöltött kép üres vagy túl kicsi.")
+
+    organs_list = _normalize_organs(organs)
+
+    # --- 1) Plant identify ---
+    identify_url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
+    identify_params = _plantnet_params_with_organs(organs_list)
+    identify_files = {
+        "images": (
+            image.filename or "image.jpg",
+            img_bytes,
+            image.content_type or "image/jpeg",
+        )
+    }
+
+    # --- 2) Disease identify ---
+    disease_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
+    disease_params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
+    disease_files = {
+        "images": (
+            image.filename or "image.jpg",
+            img_bytes,
+            image.content_type or "image/jpeg",
+        )
+    }
+
+    # Két külső hívás ugyanarra a képre (sorban: egyszerűbb hibakezelés)
+    r1 = await _client(app).post(identify_url, params=identify_params, files=identify_files)
+    if r1.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={"plantnet_stage": "identify", "plantnet_status": r1.status_code, "plantnet_error": _safe_json(r1)},
+        )
+
+    r2 = await _client(app).post(disease_url, params=disease_params, files=disease_files)
+    if r2.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={"plantnet_stage": "diseases", "plantnet_status": r2.status_code, "plantnet_error": _safe_json(r2)},
+        )
+
+    plant_compact = _compact_species_response(r1.json())
+    disease_compact = _compact_disease_response(r2.json())
+
+    # Egységes, GPT-barát “egyben” válasz
+    return {
+        "plant": plant_compact,
+        "diseaseOrPest": disease_compact,
+        "summary": {
+            "bestPlant": plant_compact.get("bestMatch"),
+            "plantScore": (plant_compact.get("confidence") or {}).get("top1_score"),
+            "bestIssue": disease_compact.get("bestMatch"),
+            "issueScore": (disease_compact.get("confidence") or {}).get("top1_score"),
+            "project": project,
+            "organs": organs_list,
+        },
+    }
