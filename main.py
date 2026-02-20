@@ -243,4 +243,3 @@ async def identifyPlantB64(payload: IdentifyB64Request):
         organs=organs,
     )
     return _to_identify_response(pn)
-```0
