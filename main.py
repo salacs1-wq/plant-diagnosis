@@ -27,7 +27,7 @@ DATA_URL_RE = re.compile(
 # ----------------------------
 # APP
 # ----------------------------
-app = FastAPI(title="Plant Diagnosis API", version="1.1.5")
+app = FastAPI(title="Plant Diagnosis API", version="1.1.6")
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,7 +38,7 @@ app.add_middleware(
 )
 
 # ----------------------------
-# GLOBAL ERROR HANDLER (ne legyen néma 500)
+# GLOBAL ERROR HANDLER
 # ----------------------------
 @app.exception_handler(Exception)
 def global_exception_handler(request: Request, exc: Exception):
@@ -69,14 +69,6 @@ def _normalize_organs(organs: Optional[str]) -> List[str]:
     parts = [p for p in parts if p]
     return parts or ["leaf"]
 
-def _plantnet_params_only_key() -> List[Tuple[str, str]]:
-    # PlantNet: api-key query param
-    return [("api-key", PLANTNET_API_KEY)]
-
-def _plantnet_organs_form(organs_list: List[str]) -> List[Tuple[str, str]]:
-    # PlantNet v2 identify: organs mező form-data-ban, többször ismételve
-    return [("organs", o) for o in (organs_list or ["leaf"])]
-
 def _safe_json(resp: httpx.Response) -> Any:
     try:
         return resp.json()
@@ -86,105 +78,6 @@ def _safe_json(resp: httpx.Response) -> Any:
         except Exception:
             return {"status": resp.status_code, "non_json": True}
 
-def _decode_base64_image(image_base64: str) -> Tuple[bytes, str]:
-    image_base64 = (image_base64 or "").strip()
-    if not image_base64:
-        raise HTTPException(status_code=422, detail="Hiányzik: image_base64")
-
-    mime = "image/jpeg"
-    m = DATA_URL_RE.match(image_base64)
-    if m:
-        mime = m.group("mime").strip().lower()
-        image_base64 = m.group("data").strip()
-
-    image_base64 = re.sub(r"\s+", "", image_base64)
-    missing = len(image_base64) % 4
-    if missing:
-        image_base64 += "=" * (4 - missing)
-
-    try:
-        data = base64.b64decode(image_base64, validate=False)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Nem érvényes base64 (dekódolási hiba).")
-
-    if not data or len(data) < 50:
-        raise HTTPException(status_code=422, detail="A kép túl kicsi vagy üres (base64).")
-
-    return data, mime
-
-def _compact_species_response(raw: Any) -> Dict[str, Any]:
-    if not isinstance(raw, dict):
-        return {
-            "bestMatch": "ismeretlen",
-            "confidence": {"top1_score": None, "level": "species"},
-            "topMatches": [],
-            "meta": {"note": "PlantNet válasz nem dict"},
-        }
-
-    results = raw.get("results") or []
-    top = []
-    best = "ismeretlen"
-    best_score = None
-
-    for r in results[:5]:
-        if not isinstance(r, dict):
-            continue
-        score = r.get("score")
-        species = r.get("species") or {}
-        sci = None
-        if isinstance(species, dict):
-            sci = species.get("scientificNameWithoutAuthor") or species.get("scientificName")
-        if not sci:
-            continue
-        if best == "ismeretlen":
-            best = sci
-            best_score = score
-        top.append({"name": sci, "score": float(score) if score is not None else None})
-
-    return {
-        "bestMatch": best,
-        "confidence": {"top1_score": float(best_score) if best_score is not None else None, "level": "species"},
-        "topMatches": top[:3],
-        "meta": {"project": (raw.get("query") or {}).get("project") or PLANTNET_PROJECT},
-    }
-
-def _compact_disease_response(raw: Any) -> Dict[str, Any]:
-    if not isinstance(raw, dict):
-        return {
-            "bestMatch": "ismeretlen",
-            "confidence": {"top1_score": None, "level": "disease_or_pest"},
-            "topMatches": [],
-            "meta": {"note": "PlantNet válasz nem dict"},
-        }
-
-    results = raw.get("results") or raw.get("diseases") or []
-    top = []
-    best = "ismeretlen"
-    best_score = None
-
-    for r in results[:5]:
-        if not isinstance(r, dict):
-            continue
-        score = r.get("score") or r.get("confidence")
-        name = r.get("name")
-        if not name:
-            d = r.get("disease") if isinstance(r.get("disease"), dict) else None
-            if d:
-                name = d.get("name") or d.get("id")
-        if not name:
-            continue
-        if best == "ismeretlen":
-            best = name
-            best_score = score
-        top.append({"name": name, "score": float(score) if score is not None else None})
-
-    return {
-        "bestMatch": best,
-        "confidence": {"top1_score": float(best_score) if best_score is not None else None, "level": "disease_or_pest"},
-        "topMatches": top[:3],
-        "meta": {"project": (raw.get("query") or {}).get("project") or PLANTNET_PROJECT},
-    }
-
 def _httpx_client_sync() -> httpx.Client:
     timeout = httpx.Timeout(HTTP_TIMEOUT, connect=HTTP_CONNECT_TIMEOUT)
     limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
@@ -192,7 +85,7 @@ def _httpx_client_sync() -> httpx.Client:
         timeout=timeout,
         limits=limits,
         follow_redirects=True,
-        headers={"User-Agent": "PlantDiagnosisBot/1.1.5"},
+        headers={"User-Agent": "PlantDiagnosisBot/1.1.6"},
     )
 
 def _download_openai_file_sync(download_link: str) -> Tuple[bytes, str]:
@@ -226,6 +119,59 @@ def _download_openai_file_sync(download_link: str) -> Tuple[bytes, str]:
     mime = r.headers.get("content-type") or "image/jpeg"
     return data, mime
 
+def _compact_species_response(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {"bestMatch": "ismeretlen", "confidence": {"top1_score": None, "level": "species"}, "topMatches": []}
+    results = raw.get("results") or []
+    best = "ismeretlen"
+    best_score = None
+    top = []
+    for r in results[:5]:
+        if not isinstance(r, dict):
+            continue
+        score = r.get("score")
+        species = r.get("species") or {}
+        sci = species.get("scientificNameWithoutAuthor") or species.get("scientificName") if isinstance(species, dict) else None
+        if not sci:
+            continue
+        if best == "ismeretlen":
+            best = sci
+            best_score = score
+        top.append({"name": sci, "score": float(score) if score is not None else None})
+    return {
+        "bestMatch": best,
+        "confidence": {"top1_score": float(best_score) if best_score is not None else None, "level": "species"},
+        "topMatches": top[:3],
+    }
+
+def _compact_disease_response(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {"bestMatch": "ismeretlen", "confidence": {"top1_score": None, "level": "disease_or_pest"}, "topMatches": []}
+    results = raw.get("results") or raw.get("diseases") or []
+    best = "ismeretlen"
+    best_score = None
+    top = []
+    for r in results[:5]:
+        if not isinstance(r, dict):
+            continue
+        score = r.get("score") or r.get("confidence")
+        name = r.get("name")
+        if not name:
+            d = r.get("disease") if isinstance(r.get("disease"), dict) else None
+            if d:
+                name = d.get("name") or d.get("id")
+        if not name:
+            continue
+        if best == "ismeretlen":
+            best = name
+            best_score = score
+        top.append({"name": name, "score": float(score) if score is not None else None})
+    return {
+        "bestMatch": best,
+        "confidence": {"top1_score": float(best_score) if best_score is not None else None, "level": "disease_or_pest"},
+        "topMatches": top[:3],
+    }
+
 # ----------------------------
 # ENDPOINTS
 # ----------------------------
@@ -239,9 +185,8 @@ def health():
 
 @app.get("/_build")
 def build():
-    return {"version": "1.1.5", "python": os.sys.version, "httpx": httpx.__version__}
+    return {"version": "1.1.6", "python": os.sys.version, "httpx": httpx.__version__}
 
-# --------- GPT Actions endpoint ----------
 @app.post("/diagnose_files")
 def diagnose_files(payload: Dict[str, Any] = Body(...)):
     _require_api_key()
@@ -260,15 +205,18 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
 
     img_bytes, mime = _download_openai_file_sync(first.get("download_link"))
 
-    # 1) Plant identify (organs form-data, api-key query)
+    # --- 1) Plant identify: multipart ONLY via files list (NO data=)
     identify_url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
-    identify_params = _plantnet_params_only_key()
-    identify_data = _plantnet_organs_form(organs_list)
-    identify_files = {"images": ("image.jpg", img_bytes, mime)}
+    identify_params = [("api-key", PLANTNET_API_KEY)]
+
+    identify_files = []
+    identify_files.append(("images", ("image.jpg", img_bytes, mime)))
+    for o in organs_list:
+        identify_files.append(("organs", (None, o)))  # form field repeated
 
     with _httpx_client_sync() as client:
         try:
-            r1 = client.post(identify_url, params=identify_params, data=identify_data, files=identify_files)
+            r1 = client.post(identify_url, params=identify_params, files=identify_files)
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "network_error": str(e)})
 
@@ -278,10 +226,10 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
             detail={"plantnet_stage": "identify", "plantnet_status": r1.status_code, "plantnet_error": _safe_json(r1)},
         )
 
-    # 2) Disease identify
+    # --- 2) Disease identify
     disease_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     disease_params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
-    disease_files = {"images": ("image.jpg", img_bytes, mime)}
+    disease_files = [("images", ("image.jpg", img_bytes, mime))]
 
     with _httpx_client_sync() as client:
         try:
@@ -310,42 +258,3 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
             "organs": organs_list,
         },
     }
-
-# --------- Optional base64 endpoints ----------
-@app.post("/identify_b64")
-def identify_b64(payload: Dict[str, Any] = Body(...)):
-    _require_api_key()
-    img_bytes, mime = _decode_base64_image(payload.get("image_base64") or "")
-    organs_list = _normalize_organs(payload.get("organs") or "leaf")
-    project = payload.get("project") or PLANTNET_PROJECT
-
-    url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
-    params = _plantnet_params_only_key()
-    data = _plantnet_organs_form(organs_list)
-    files = {"images": ("image.jpg", img_bytes, mime)}
-
-    with _httpx_client_sync() as client:
-        r = client.post(url, params=params, data=data, files=files)
-
-    if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "plantnet_status": r.status_code, "plantnet_error": _safe_json(r)})
-
-    return _compact_species_response(_safe_json(r))
-
-@app.post("/diseases/identify_b64")
-def disease_b64(payload: Dict[str, Any] = Body(...)):
-    _require_api_key()
-    img_bytes, mime = _decode_base64_image(payload.get("image_base64") or "")
-    project = payload.get("project") or PLANTNET_PROJECT
-
-    url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
-    params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
-    files = {"images": ("image.jpg", img_bytes, mime)}
-
-    with _httpx_client_sync() as client:
-        r = client.post(url, params=params, files=files)
-
-    if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "plantnet_status": r.status_code, "plantnet_error": _safe_json(r)})
-
-    return _compact_disease_response(_safe_json(r))
