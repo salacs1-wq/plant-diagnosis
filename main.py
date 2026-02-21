@@ -3,10 +3,12 @@ import re
 import base64
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
+import traceback
 
 import httpx
-from fastapi import FastAPI, File, UploadFile, Query, Body, HTTPException
+from fastapi import FastAPI, File, UploadFile, Query, Body, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # ----------------------------
 # Config
@@ -45,7 +47,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Növénydiagnosztikai API",
-    version="1.1.1",
+    version="1.1.2",
     description="PlantNet proxy (növényazonosítás + betegség/kártevő azonosítás) GPT-hez optimalizált válaszokkal.",
     lifespan=lifespan,
 )
@@ -57,6 +59,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ----------------------------
+# Global error handler (hogy a 500 ne legyen vak)
+# ----------------------------
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    # Ne dobjunk el információt: Actions debughoz kell.
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "error": "internal_server_error",
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+                "path": str(request.url.path),
+                "trace": traceback.format_exc().splitlines()[-12:],  # rövidített stack
+            }
+        },
+    )
 
 # ----------------------------
 # Helpers
@@ -82,7 +103,13 @@ def _safe_json(resp: httpx.Response) -> Any:
     try:
         return resp.json()
     except Exception:
-        return resp.text
+        txt = None
+        try:
+            # ne törjön el bináris tartalmon
+            txt = resp.text[:500]
+        except Exception:
+            pass
+        return {"non_json": True, "status_code": resp.status_code, "text_preview": txt}
 
 def _decode_base64_image(image_base64: str) -> Tuple[bytes, str]:
     image_base64 = (image_base64 or "").strip()
@@ -111,20 +138,32 @@ def _decode_base64_image(image_base64: str) -> Tuple[bytes, str]:
 
     return data, mime
 
-def _compact_species_response(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _compact_species_response(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {
+            "bestMatch": "ismeretlen",
+            "confidence": {"top1_score": None, "level": "species"},
+            "topMatches": [],
+            "meta": {"note": "PlantNet válasz nem dict", "raw_type": type(raw).__name__},
+        }
+
     results = raw.get("results") or []
     top_matches: List[Dict[str, Any]] = []
     best = None
     best_score = None
 
     for r in results[:5]:
+        if not isinstance(r, dict):
+            continue
         score = r.get("score")
         species = (r.get("species") or {})
-        sci = (
-            species.get("scientificNameWithoutAuthor")
-            or species.get("scientificName")
-            or species.get("scientificNameAuthorship")
-        )
+        sci = None
+        if isinstance(species, dict):
+            sci = (
+                species.get("scientificNameWithoutAuthor")
+                or species.get("scientificName")
+                or species.get("scientificNameAuthorship")
+            )
         if not sci:
             continue
         if best is None:
@@ -141,36 +180,37 @@ def _compact_species_response(raw: Dict[str, Any]) -> Dict[str, Any]:
         "topMatches": top_matches[:3],
         "meta": {
             "project": (raw.get("query") or {}).get("project") or PLANTNET_PROJECT,
-            "language": raw.get("language") or (raw.get("query") or {}).get("language"),
         },
     }
 
-def _compact_disease_response(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _compact_disease_response(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {
+            "bestMatch": "ismeretlen",
+            "confidence": {"top1_score": None, "level": "disease_or_pest"},
+            "topMatches": [],
+            "meta": {"note": "PlantNet válasz nem dict", "raw_type": type(raw).__name__},
+        }
+
     results = raw.get("results") or raw.get("diseases") or []
     candidates: List[Dict[str, Any]] = []
     top_name = None
     top_score = None
 
     for r in results[:5]:
+        if not isinstance(r, dict):
+            continue
         score = r.get("score") or r.get("confidence")
-        name = (
-            r.get("name")
-            or r.get("disease")
-            or (r.get("label") if isinstance(r.get("label"), str) else None)
-        )
-
+        name = r.get("name")
         if not name:
             d = r.get("disease") if isinstance(r.get("disease"), dict) else None
             if d:
                 name = d.get("name") or d.get("id")
-
         if not name:
             continue
-
         if top_name is None:
             top_name = name
             top_score = score
-
         candidates.append({"name": name, "score": float(score) if score is not None else None})
 
     return {
@@ -185,11 +225,9 @@ def _compact_disease_response(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 # --- PlantNet request building ---
 def _plantnet_params_only_key() -> List[Tuple[str, str]]:
-    # PlantNet: api-key query param
     return [("api-key", PLANTNET_API_KEY)]
 
 def _plantnet_organs_form(organs_list: List[str]) -> List[Tuple[str, str]]:
-    # PlantNet: organs NEM query param; form-data mezőként megy (többször ismételve)
     ol = organs_list or ["leaf"]
     return [("organs", o) for o in ol]
 
@@ -206,12 +244,23 @@ async def _download_openai_file(download_link: str) -> Tuple[bytes, str]:
         raise HTTPException(status_code=502, detail={"file_fetch_error": "request_error", "message": str(e)})
 
     if r.status_code >= 400:
+        # ne használjunk r.text-et vakon
+        preview = None
+        ct = r.headers.get("content-type", "")
+        try:
+            if "text" in ct or "json" in ct:
+                preview = r.text[:500]
+            else:
+                preview = (r.content[:200]).hex()
+        except Exception:
+            preview = None
+
         raise HTTPException(
             status_code=502,
             detail={
                 "file_fetch_status": r.status_code,
-                "file_fetch_content_type": r.headers.get("content-type"),
-                "file_fetch_text": (r.text[:300] if isinstance(r.text, str) else None),
+                "file_fetch_content_type": ct,
+                "file_fetch_preview": preview,
             },
         )
 
@@ -233,199 +282,13 @@ async def rootGet():
 async def healthGet():
     return {"status": "ok"}
 
-# ---------- Identify (multipart) ----------
-@app.post("/identify")
-async def identifyPlant(
-    image: UploadFile = File(...),
-    organs: str = Query("leaf", description="Pl. leaf/flower/fruit/bark (több is lehet: leaf,flower)"),
-    project: str = Query(default=PLANTNET_PROJECT, description="PlantNet project, pl. weurope vagy all"),
-):
-    _require_api_key()
-
-    img_bytes = await image.read()
-    if not img_bytes or len(img_bytes) < 50:
-        raise HTTPException(status_code=422, detail="A feltöltött kép üres vagy túl kicsi.")
-
-    organs_list = _normalize_organs(organs)
-
-    url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
-    params = _plantnet_params_only_key()
-    data = _plantnet_organs_form(organs_list)
-    files = {"images": (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg")}
-
-    try:
-        r = await _client(app).post(url, params=params, data=data, files=files)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "network_error": str(e)})
-
-    if r.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail={"plantnet_stage": "identify", "plantnet_status": r.status_code, "plantnet_error": _safe_json(r)},
-        )
-
-    return _compact_species_response(r.json())
-
-# ---------- Identify (base64) ----------
-@app.post("/identify_b64")
-async def identifyPlantB64(
-    payload: Dict[str, Any] = Body(..., example={"image_base64": "data:image/jpeg;base64,...", "organs": "leaf", "project": "weurope"})
-):
-    _require_api_key()
-
-    image_base64 = (payload.get("image_base64") or "").strip()
-    if not image_base64:
-        raise HTTPException(status_code=422, detail="Hiányzik: image_base64")
-
-    organs = payload.get("organs") or "leaf"
-    project = payload.get("project") or PLANTNET_PROJECT
-
-    img_bytes, mime = _decode_base64_image(image_base64)
-    organs_list = _normalize_organs(str(organs))
-
-    url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
-    params = _plantnet_params_only_key()
-    data = _plantnet_organs_form(organs_list)
-    files = {"images": ("image.jpg", img_bytes, mime)}
-
-    try:
-        r = await _client(app).post(url, params=params, data=data, files=files)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "network_error": str(e)})
-
-    if r.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail={"plantnet_stage": "identify", "plantnet_status": r.status_code, "plantnet_error": _safe_json(r)},
-        )
-
-    return _compact_species_response(r.json())
-
-# ---------- Diseases (multipart) ----------
-@app.post("/diseases/identify")
-async def identifyDisease(
-    image: UploadFile = File(...),
-    project: str = Query(default=PLANTNET_PROJECT, description="PlantNet project (ha releváns)"),
-):
-    _require_api_key()
-
-    img_bytes = await image.read()
-    if not img_bytes or len(img_bytes) < 50:
-        raise HTTPException(status_code=422, detail="A feltöltött kép üres vagy túl kicsi.")
-
-    url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
-    params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
-    files = {"images": (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg")}
-
-    try:
-        r = await _client(app).post(url, params=params, files=files)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "network_error": str(e)})
-
-    if r.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail={"plantnet_stage": "diseases", "plantnet_status": r.status_code, "plantnet_error": _safe_json(r)},
-        )
-
-    return _compact_disease_response(r.json())
-
-# ---------- Diseases (base64) ----------
-@app.post("/diseases/identify_b64")
-async def identifyDiseaseB64(
-    payload: Dict[str, Any] = Body(..., example={"image_base64": "data:image/jpeg;base64,...", "project": "weurope"})
-):
-    _require_api_key()
-
-    image_base64 = (payload.get("image_base64") or "").strip()
-    if not image_base64:
-        raise HTTPException(status_code=422, detail="Hiányzik: image_base64")
-
-    project = payload.get("project") or PLANTNET_PROJECT
-    img_bytes, mime = _decode_base64_image(image_base64)
-
-    url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
-    params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
-    files = {"images": ("image.jpg", img_bytes, mime)}
-
-    try:
-        r = await _client(app).post(url, params=params, files=files)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "network_error": str(e)})
-
-    if r.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail={"plantnet_stage": "diseases", "plantnet_status": r.status_code, "plantnet_error": _safe_json(r)},
-        )
-
-    return _compact_disease_response(r.json())
-
-# ---------- Diagnose (multipart; külső klienseknek) ----------
-@app.post("/diagnose")
-async def diagnose(
-    image: UploadFile = File(...),
-    organs: str = Query("leaf", description="Pl. leaf/flower/fruit/bark (több is lehet: leaf,flower)"),
-    project: str = Query(default=PLANTNET_PROJECT, description="PlantNet project, pl. weurope vagy all"),
-):
-    _require_api_key()
-
-    img_bytes = await image.read()
-    if not img_bytes or len(img_bytes) < 50:
-        raise HTTPException(status_code=422, detail="A feltöltött kép üres vagy túl kicsi.")
-
-    organs_list = _normalize_organs(organs)
-
-    identify_url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
-    identify_params = _plantnet_params_only_key()
-    identify_data = _plantnet_organs_form(organs_list)
-    identify_files = {"images": (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg")}
-
-    try:
-        r1 = await _client(app).post(identify_url, params=identify_params, data=identify_data, files=identify_files)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "network_error": str(e)})
-
-    if r1.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail={"plantnet_stage": "identify", "plantnet_status": r1.status_code, "plantnet_error": _safe_json(r1)},
-        )
-
-    disease_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
-    disease_params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
-    disease_files = {"images": (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg")}
-
-    try:
-        r2 = await _client(app).post(disease_url, params=disease_params, files=disease_files)
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "network_error": str(e)})
-
-    if r2.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail={"plantnet_stage": "diseases", "plantnet_status": r2.status_code, "plantnet_error": _safe_json(r2)},
-        )
-
-    plant_compact = _compact_species_response(r1.json())
-    disease_compact = _compact_disease_response(r2.json())
-
-    return {
-        "plant": plant_compact,
-        "diseaseOrPest": disease_compact,
-        "summary": {
-            "bestPlant": plant_compact.get("bestMatch"),
-            "plantScore": (plant_compact.get("confidence") or {}).get("top1_score"),
-            "bestIssue": disease_compact.get("bestMatch"),
-            "issueScore": (disease_compact.get("confidence") or {}).get("top1_score"),
-            "project": project,
-            "organs": organs_list,
-        },
-    }
-
-# ---------- DiagnoseFiles (GPT Actions-kompatibilis: openaiFileIdRefs) ----------
 @app.post("/diagnose_files")
 async def diagnoseFiles(payload: Dict[str, Any] = Body(...)):
+    """
+    GPT Actions kompatibilis diagnózis:
+    - openaiFileIdRefs: [{name,id,mime_type,download_link}, ...]
+    - organs, project opcionális
+    """
     _require_api_key()
 
     organs = payload.get("organs") or "leaf"
@@ -443,6 +306,7 @@ async def diagnoseFiles(payload: Dict[str, Any] = Body(...)):
     download_link = first.get("download_link")
     img_bytes, mime = await _download_openai_file(download_link)
 
+    # 1) Plant identify
     identify_url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     identify_params = _plantnet_params_only_key()
     identify_data = _plantnet_organs_form(organs_list)
@@ -459,6 +323,7 @@ async def diagnoseFiles(payload: Dict[str, Any] = Body(...)):
             detail={"plantnet_stage": "identify", "plantnet_status": r1.status_code, "plantnet_error": _safe_json(r1)},
         )
 
+    # 2) Disease identify
     disease_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     disease_params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
     disease_files = {"images": ("image.jpg", img_bytes, mime)}
@@ -474,8 +339,19 @@ async def diagnoseFiles(payload: Dict[str, Any] = Body(...)):
             detail={"plantnet_stage": "diseases", "plantnet_status": r2.status_code, "plantnet_error": _safe_json(r2)},
         )
 
-    plant_compact = _compact_species_response(r1.json())
-    disease_compact = _compact_disease_response(r2.json())
+    # JSON parse safety
+    try:
+        plant_raw = r1.json()
+    except Exception:
+        plant_raw = {"non_json": True, "status": r1.status_code, "text": (r1.text[:500] if hasattr(r1, "text") else None)}
+
+    try:
+        disease_raw = r2.json()
+    except Exception:
+        disease_raw = {"non_json": True, "status": r2.status_code, "text": (r2.text[:500] if hasattr(r2, "text") else None)}
+
+    plant_compact = _compact_species_response(plant_raw)
+    disease_compact = _compact_disease_response(disease_raw)
 
     return {
         "plant": plant_compact,
