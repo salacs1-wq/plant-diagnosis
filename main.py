@@ -230,12 +230,12 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
     disease_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     
     # PlantNet diseases: NINCS project query param
-disease_params = [("api-key", PLANTNET_API_KEY)]
+    disease_params = [("api-key", PLANTNET_API_KEY)]
 
-# opcionális: organs itt is küldhető form fieldként (1 kép -> 1 organ)
-disease_files = [("images", ("image.jpg", img_bytes, mime))]
-for o in organs_list[:1]:
-    disease_files.append(("organs", (None, o)))
+    # opcionális: organs itt is küldhető form fieldként (1 kép -> 1 organ)
+    disease_files = [("images", ("image.jpg", img_bytes, mime))]
+    for o in organs_list[:1]:
+        disease_files.append(("organs", (None, o)))
 
     with _httpx_client_sync() as client:
         try:
