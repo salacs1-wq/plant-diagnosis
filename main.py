@@ -1,11 +1,11 @@
 import os
 import re
 import base64
-from typing import Any, Dict, List, Optional, Tuple
 import traceback
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import FastAPI, File, UploadFile, Query, Body, HTTPException, Request
+from fastapi import FastAPI, Body, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -27,7 +27,7 @@ DATA_URL_RE = re.compile(
 # ----------------------------
 # APP
 # ----------------------------
-app = FastAPI(title="Plant Diagnosis API", version="1.1.4")
+app = FastAPI(title="Plant Diagnosis API", version="1.1.5")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,7 +41,7 @@ app.add_middleware(
 # GLOBAL ERROR HANDLER (ne legyen néma 500)
 # ----------------------------
 @app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
+def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={
@@ -53,19 +53,6 @@ async def global_exception_handler(request: Request, exc: Exception):
                 "trace": traceback.format_exc().splitlines()[-12:],
             }
         },
-    )
-
-# ----------------------------
-# HTTPX FACTORY (PER-REQUEST)
-# ----------------------------
-def _httpx_client() -> httpx.AsyncClient:
-    timeout = httpx.Timeout(HTTP_TIMEOUT, connect=HTTP_CONNECT_TIMEOUT)
-    limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
-    return httpx.AsyncClient(
-        timeout=timeout,
-        limits=limits,
-        follow_redirects=True,
-        headers={"User-Agent": "PlantDiagnosisBot/1.1.4"},
     )
 
 # ----------------------------
@@ -82,6 +69,14 @@ def _normalize_organs(organs: Optional[str]) -> List[str]:
     parts = [p for p in parts if p]
     return parts or ["leaf"]
 
+def _plantnet_params_only_key() -> List[Tuple[str, str]]:
+    # PlantNet: api-key query param
+    return [("api-key", PLANTNET_API_KEY)]
+
+def _plantnet_organs_form(organs_list: List[str]) -> List[Tuple[str, str]]:
+    # PlantNet v2 identify: organs mező form-data-ban, többször ismételve
+    return [("organs", o) for o in (organs_list or ["leaf"])]
+
 def _safe_json(resp: httpx.Response) -> Any:
     try:
         return resp.json()
@@ -90,14 +85,6 @@ def _safe_json(resp: httpx.Response) -> Any:
             return {"status": resp.status_code, "text": resp.text[:500]}
         except Exception:
             return {"status": resp.status_code, "non_json": True}
-
-def _plantnet_params_only_key() -> List[Tuple[str, str]]:
-    # PlantNet: api-key query param
-    return [("api-key", PLANTNET_API_KEY)]
-
-def _plantnet_organs_form(organs_list: List[str]) -> List[Tuple[str, str]]:
-    # PlantNet v2 identify: organs mező form-data-ban, többször ismételve
-    return [("organs", o) for o in (organs_list or ["leaf"])]
 
 def _decode_base64_image(image_base64: str) -> Tuple[bytes, str]:
     image_base64 = (image_base64 or "").strip()
@@ -198,26 +185,38 @@ def _compact_disease_response(raw: Any) -> Dict[str, Any]:
         "meta": {"project": (raw.get("query") or {}).get("project") or PLANTNET_PROJECT},
     }
 
-async def _download_openai_file(download_link: str) -> Tuple[bytes, str]:
+def _httpx_client_sync() -> httpx.Client:
+    timeout = httpx.Timeout(HTTP_TIMEOUT, connect=HTTP_CONNECT_TIMEOUT)
+    limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
+    return httpx.Client(
+        timeout=timeout,
+        limits=limits,
+        follow_redirects=True,
+        headers={"User-Agent": "PlantDiagnosisBot/1.1.5"},
+    )
+
+def _download_openai_file_sync(download_link: str) -> Tuple[bytes, str]:
     if not download_link:
         raise HTTPException(status_code=422, detail="Hiányzik: openaiFileIdRefs[0].download_link")
 
-    async with _httpx_client() as client:
+    with _httpx_client_sync() as client:
         try:
-            r = await client.get(download_link)
+            r = client.get(download_link)
         except httpx.TimeoutException as e:
             raise HTTPException(status_code=502, detail={"file_fetch_error": "timeout", "message": str(e)})
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail={"file_fetch_error": "request_error", "message": str(e)})
 
     if r.status_code >= 400:
+        ct = r.headers.get("content-type")
+        preview = None
+        try:
+            preview = r.text[:300] if (ct and ("text" in ct or "json" in ct)) else None
+        except Exception:
+            preview = None
         raise HTTPException(
             status_code=502,
-            detail={
-                "file_fetch_status": r.status_code,
-                "file_fetch_content_type": r.headers.get("content-type"),
-                "file_fetch_preview": (r.text[:300] if "text" in (r.headers.get("content-type") or "") else None),
-            },
+            detail={"file_fetch_status": r.status_code, "file_fetch_content_type": ct, "file_fetch_preview": preview},
         )
 
     data = r.content
@@ -231,20 +230,20 @@ async def _download_openai_file(download_link: str) -> Tuple[bytes, str]:
 # ENDPOINTS
 # ----------------------------
 @app.get("/")
-async def root():
+def root():
     return {"status": "ok"}
 
 @app.get("/health")
-async def health():
+def health():
     return {"status": "ok"}
 
 @app.get("/_build")
-async def build():
-    return {"version": "1.1.4", "python": os.sys.version, "httpx": httpx.__version__}
+def build():
+    return {"version": "1.1.5", "python": os.sys.version, "httpx": httpx.__version__}
 
-# --------- GPT Actions main endpoint ----------
+# --------- GPT Actions endpoint ----------
 @app.post("/diagnose_files")
-async def diagnose_files(payload: Dict[str, Any] = Body(...)):
+def diagnose_files(payload: Dict[str, Any] = Body(...)):
     _require_api_key()
 
     organs = payload.get("organs") or "leaf"
@@ -259,38 +258,43 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     if not isinstance(first, dict):
         raise HTTPException(status_code=422, detail="Hibás openaiFileIdRefs[0] (objektumot várunk)")
 
-    img_bytes, mime = await _download_openai_file(first.get("download_link"))
+    img_bytes, mime = _download_openai_file_sync(first.get("download_link"))
 
-    # 1) Plant identify
+    # 1) Plant identify (organs form-data, api-key query)
     identify_url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     identify_params = _plantnet_params_only_key()
     identify_data = _plantnet_organs_form(organs_list)
     identify_files = {"images": ("image.jpg", img_bytes, mime)}
 
-    async with _httpx_client() as client:
+    with _httpx_client_sync() as client:
         try:
-            r1 = await client.post(identify_url, params=identify_params, data=identify_data, files=identify_files)
+            r1 = client.post(identify_url, params=identify_params, data=identify_data, files=identify_files)
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "network_error": str(e)})
 
     if r1.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "plantnet_status": r1.status_code, "plantnet_error": _safe_json(r1)})
+        raise HTTPException(
+            status_code=502,
+            detail={"plantnet_stage": "identify", "plantnet_status": r1.status_code, "plantnet_error": _safe_json(r1)},
+        )
 
     # 2) Disease identify
     disease_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     disease_params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
     disease_files = {"images": ("image.jpg", img_bytes, mime)}
 
-    async with _httpx_client() as client:
+    with _httpx_client_sync() as client:
         try:
-            r2 = await client.post(disease_url, params=disease_params, files=disease_files)
+            r2 = client.post(disease_url, params=disease_params, files=disease_files)
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "network_error": str(e)})
 
     if r2.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "plantnet_status": r2.status_code, "plantnet_error": _safe_json(r2)})
+        raise HTTPException(
+            status_code=502,
+            detail={"plantnet_stage": "diseases", "plantnet_status": r2.status_code, "plantnet_error": _safe_json(r2)},
+        )
 
-    # Compact (GPT-friendly)
     plant_compact = _compact_species_response(_safe_json(r1))
     disease_compact = _compact_disease_response(_safe_json(r2))
 
@@ -307,9 +311,9 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
         },
     }
 
-# --------- Optional: base64 endpoints (hasznos külső integrációra) ----------
+# --------- Optional base64 endpoints ----------
 @app.post("/identify_b64")
-async def identify_b64(payload: Dict[str, Any] = Body(...)):
+def identify_b64(payload: Dict[str, Any] = Body(...)):
     _require_api_key()
     img_bytes, mime = _decode_base64_image(payload.get("image_base64") or "")
     organs_list = _normalize_organs(payload.get("organs") or "leaf")
@@ -320,8 +324,8 @@ async def identify_b64(payload: Dict[str, Any] = Body(...)):
     data = _plantnet_organs_form(organs_list)
     files = {"images": ("image.jpg", img_bytes, mime)}
 
-    async with _httpx_client() as client:
-        r = await client.post(url, params=params, data=data, files=files)
+    with _httpx_client_sync() as client:
+        r = client.post(url, params=params, data=data, files=files)
 
     if r.status_code >= 400:
         raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "plantnet_status": r.status_code, "plantnet_error": _safe_json(r)})
@@ -329,7 +333,7 @@ async def identify_b64(payload: Dict[str, Any] = Body(...)):
     return _compact_species_response(_safe_json(r))
 
 @app.post("/diseases/identify_b64")
-async def disease_b64(payload: Dict[str, Any] = Body(...)):
+def disease_b64(payload: Dict[str, Any] = Body(...)):
     _require_api_key()
     img_bytes, mime = _decode_base64_image(payload.get("image_base64") or "")
     project = payload.get("project") or PLANTNET_PROJECT
@@ -338,8 +342,8 @@ async def disease_b64(payload: Dict[str, Any] = Body(...)):
     params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
     files = {"images": ("image.jpg", img_bytes, mime)}
 
-    async with _httpx_client() as client:
-        r = await client.post(url, params=params, files=files)
+    with _httpx_client_sync() as client:
+        r = client.post(url, params=params, files=files)
 
     if r.status_code >= 400:
         raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "plantnet_status": r.status_code, "plantnet_error": _safe_json(r)})
