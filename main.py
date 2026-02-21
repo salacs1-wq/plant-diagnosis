@@ -29,7 +29,9 @@ DATA_URL_RE = re.compile(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     timeout = httpx.Timeout(DEFAULT_TIMEOUT, connect=DEFAULT_CONNECT_TIMEOUT)
-    app.state.http = httpx.AsyncClient(timeout=timeout)
+    headers = {"User-Agent": "Mozilla/5.0 (PlantDiagnosisBot/1.1)"}
+    limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+    app.state.http = httpx.AsyncClient(timeout=timeout, headers=headers, limits=limits, follow_redirects=True)
     try:
         yield
     finally:
@@ -193,18 +195,25 @@ def _plantnet_organs_form(organs_list: List[str]) -> List[Tuple[str, str]]:
 
 # --- OpenAI file download (Actions) ---
 async def _download_openai_file(download_link: str) -> Tuple[bytes, str]:
-    """
-    Letölti a ChatGPT Actions által adott, rövid ideig élő file URL-t.
-    Visszaad: (bytes, mime)
-    """
     if not download_link:
         raise HTTPException(status_code=422, detail="Hiányzik: openaiFileIdRefs.download_link")
 
-    r = await _client(app).get(download_link, follow_redirects=True)
+    try:
+        r = await _client(app).get(download_link)
+    except httpx.TimeoutException as e:
+        raise HTTPException(status_code=502, detail={"file_fetch_error": "timeout", "message": str(e)})
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail={"file_fetch_error": "request_error", "message": str(e)})
+
     if r.status_code >= 400:
+        # fontos: visszaadjuk a státuszt és 1 rövid részletet
         raise HTTPException(
             status_code=502,
-            detail={"file_fetch_status": r.status_code, "file_fetch_error": _safe_json(r)},
+            detail={
+                "file_fetch_status": r.status_code,
+                "file_fetch_content_type": r.headers.get("content-type"),
+                "file_fetch_text": (r.text[:300] if isinstance(r.text, str) else None),
+            },
         )
 
     data = r.content
@@ -346,21 +355,20 @@ async def diagnose(
     identify_data = _plantnet_organs_form(organs_list)
     identify_files = {"images": (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg")}
 
+    try:
     r1 = await _client(app).post(identify_url, params=identify_params, data=identify_data, files=identify_files)
-    if r1.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "plantnet_status": r1.status_code, "plantnet_error": _safe_json(r1)})
-
+    except httpx.RequestError as e:
+    raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "network_error": str(e)})
+    
     # 2) diseases
     disease_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     disease_params = [("api-key", PLANTNET_API_KEY), ("project", str(project))]
     disease_files = {"images": (image.filename or "image.jpg", img_bytes, image.content_type or "image/jpeg")}
 
+    try:
     r2 = await _client(app).post(disease_url, params=disease_params, files=disease_files)
-    if r2.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "plantnet_status": r2.status_code, "plantnet_error": _safe_json(r2)})
-
-    plant_compact = _compact_species_response(r1.json())
-    disease_compact = _compact_disease_response(r2.json())
+    except httpx.RequestError as e:
+    raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "network_error": str(e)})
 
     return {
         "plant": plant_compact,
