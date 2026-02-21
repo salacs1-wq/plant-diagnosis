@@ -1,6 +1,8 @@
 import os
 import re
 import traceback
+import time
+import secrets
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -21,7 +23,7 @@ HTTP_CONNECT_TIMEOUT = float(os.getenv("HTTP_CONNECT_TIMEOUT", "10"))
 # ----------------------------
 # APP
 # ----------------------------
-app = FastAPI(title="Plant Diagnosis API", version="1.2.0")
+app = FastAPI(title="Plant Diagnosis API", version="1.2.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,7 +65,7 @@ def _httpx_client_sync() -> httpx.Client:
         timeout=timeout,
         limits=limits,
         follow_redirects=True,
-        headers={"User-Agent": "PlantDiagnosisBot/1.2.0"},
+        headers={"User-Agent": "PlantDiagnosisBot/1.2.1"},
     )
 
 def _safe_json(resp: httpx.Response) -> Any:
@@ -203,7 +205,6 @@ def _protocol_slots(case_type: str) -> List[Dict[str, str]]:
             {"slot": "P4", "what": "Rejtett hely: fonák/hajtáscsúcs"},
             {"slot": "P5", "what": "Bizonyító jel: ürülék/szövedék/járat"},
         ]
-    # weed (default)
     return [
         {"slot": "W1", "what": "Egész növény felülnézet (rozetta/állomány)"},
         {"slot": "W2", "what": "Egész növény oldalnézet (szár/állás)"},
@@ -241,7 +242,7 @@ def health():
 
 @app.get("/_build")
 def build():
-    return {"version": "1.2.0", "python": os.sys.version, "httpx": httpx.__version__}
+    return {"version": "1.2.1", "python": os.sys.version, "httpx": httpx.__version__}
 
 @app.post("/diagnose_files")
 def diagnose_files(payload: Dict[str, Any] = Body(...)):
@@ -251,11 +252,13 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
     """
     _require_api_key()
 
+    request_id = f"req_{int(time.time())}_{secrets.token_hex(4)}"
+
     mode = _mode(payload)
     case_type = _case_type(payload)
 
     project = payload.get("project") or PLANTNET_PROJECT
-    organs_list = _normalize_organs(payload.get("organs") or "leaf")  # egy organ vagy több; default leaf
+    organs_list = _normalize_organs(payload.get("organs") or "leaf")
 
     refs = payload.get("openaiFileIdRefs")
     if not refs or not isinstance(refs, list):
@@ -264,7 +267,7 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
         refs = refs[:5]
 
     # 1) letöltjük a képeket
-    images: List[Tuple[str, bytes, str]] = []  # (filename, bytes, mime)
+    images: List[Tuple[str, bytes, str]] = []
     for i, ref in enumerate(refs):
         if not isinstance(ref, dict):
             continue
@@ -275,13 +278,12 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
     if not images:
         raise HTTPException(status_code=422, detail="Nem sikerült képet letölteni openaiFileIdRefs alapján.")
 
-    # organs kiosztás: ha 1 organ van, mindegyik kép azt kapja.
-    # ha több organ jön (pl. leaf,flower), akkor ciklikusan kiosztjuk.
+    # organs kiosztás
     organs_per_image: List[str] = []
     for i in range(len(images)):
         organs_per_image.append(organs_list[i % len(organs_list)] if organs_list else "leaf")
 
-    # 2) Plant identify (PlantNet v2 identify/{project})
+    # 2) Plant identify
     identify_url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     identify_params = [("api-key", PLANTNET_API_KEY)]
 
@@ -295,15 +297,20 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
         try:
             r1 = client.post(identify_url, params=identify_params, files=identify_files)
         except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "network_error": str(e)})
+            raise HTTPException(status_code=502, detail={"plantnet_stage": "identify", "network_error": str(e), "requestId": request_id})
 
     if r1.status_code >= 400:
         raise HTTPException(
             status_code=502,
-            detail={"plantnet_stage": "identify", "plantnet_status": r1.status_code, "plantnet_error": _safe_json(r1)},
+            detail={
+                "plantnet_stage": "identify",
+                "plantnet_status": r1.status_code,
+                "plantnet_error": _safe_json(r1),
+                "requestId": request_id,
+            },
         )
 
-    # 3) Disease/Pest identify (PlantNet v2 diseases/identify) — NINCS project query!
+    # 3) Disease identify — NINCS project query param!
     disease_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     disease_params = [("api-key", PLANTNET_API_KEY)]
 
@@ -315,12 +322,17 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
         try:
             r2 = client.post(disease_url, params=disease_params, files=disease_files)
         except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "network_error": str(e)})
+            raise HTTPException(status_code=502, detail={"plantnet_stage": "diseases", "network_error": str(e), "requestId": request_id})
 
     if r2.status_code >= 400:
         raise HTTPException(
             status_code=502,
-            detail={"plantnet_stage": "diseases", "plantnet_status": r2.status_code, "plantnet_error": _safe_json(r2)},
+            detail={
+                "plantnet_stage": "diseases",
+                "plantnet_status": r2.status_code,
+                "plantnet_error": _safe_json(r2),
+                "requestId": request_id,
+            },
         )
 
     plant_compact = _compact_species_response(_safe_json(r1))
@@ -331,12 +343,12 @@ def diagnose_files(payload: Dict[str, Any] = Body(...)):
 
     photo_protocol = _photo_protocol(case_type=case_type, mode=mode, images_used=images_used)
 
-    # Ha learning módban alacsony score -> kifejezetten kérjük a hiányzó slotokat
     guidance = []
     if mode == "learning" and plant_score < 0.30 and images_used < 5:
         guidance = photo_protocol.get("nextPhotos") or []
 
     return {
+        "requestId": request_id,
         "plant": plant_compact,
         "diseaseOrPest": disease_compact,
         "summary": {
