@@ -1,6 +1,7 @@
 import os
 import platform
 import traceback
+from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
 import anyio
@@ -8,22 +9,24 @@ import httpx
 from fastapi import FastAPI, Body, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from PIL import Image, ImageOps
 
 
 # ----------------------------
 # Config
 # ----------------------------
-APP_VERSION = os.getenv("APP_VERSION", "1.2.3").strip()
+APP_VERSION = os.getenv("APP_VERSION", "1.2.4").strip()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
-
-# ✅ Default: weurope (Közép-Európa app módhoz konzisztens)
 PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope").strip()
-
 PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").rstrip("/")
 
 DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "45"))
 DEFAULT_CONNECT_TIMEOUT = float(os.getenv("HTTP_CONNECT_TIMEOUT", "15"))
+
+# ✅ képnormálás kapcsoló (ha valaha ki akarod kapcsolni)
+NORMALIZE_IMAGES = os.getenv("NORMALIZE_IMAGES", "1").strip() not in ("0", "false", "False")
+
 
 app = FastAPI(
     title="Növénydiagnosztikai API (PlantNet proxy)",
@@ -101,15 +104,41 @@ def _normalize_organs_for_images(organs: str, image_count: int) -> List[str]:
     return [organ] * max(1, image_count)
 
 
+def _normalize_image_bytes(name: str, data: bytes) -> Tuple[str, bytes, str]:
+    """
+    ✅ App-szerű normálás:
+    - EXIF transpose (helyes forgatás)
+    - RGB
+    - egységes JPEG újramentés (quality=92)
+    """
+    if not NORMALIZE_IMAGES:
+        return name, data, _guess_mime(name)
+
+    try:
+        img = Image.open(BytesIO(data))
+        img = ImageOps.exif_transpose(img)
+        if img.mode not in ("RGB",):
+            img = img.convert("RGB")
+
+        out = BytesIO()
+        img.save(out, format="JPEG", quality=92, optimize=True)
+        out_bytes = out.getvalue()
+
+        # név/mime egységesítése
+        base = (name or "image").rsplit(".", 1)[0]
+        fixed_name = f"{base}.jpg"
+        return fixed_name, out_bytes, "image/jpeg"
+    except Exception:
+        # ha valamiért nem sikerül, essünk vissza nyersre
+        return name, data, _guess_mime(name)
+
+
 def _compact_species_response(
     raw: Dict[str, Any],
     *,
     project: str,
     organs_sent: Optional[str],
 ) -> Dict[str, Any]:
-    """
-    ✅ Top3 és score 1:1 PlantNet results[].score alapján.
-    """
     results = raw.get("results") or []
     top_matches: List[Dict[str, Any]] = []
 
@@ -193,7 +222,7 @@ def _sync_post(url: str, params: Dict[str, Any], data, files) -> httpx.Response:
         return client.post(url, params=params, data=data, files=files)
 
 
-async def _download_bytes(url: str) -> bytes:
+async def _download_and_prepare(name: str, mime: str, url: str) -> Tuple[str, bytes, str]:
     if not url or not isinstance(url, str):
         raise HTTPException(status_code=422, detail="Hiányzik: download_link")
 
@@ -208,7 +237,10 @@ async def _download_bytes(url: str) -> bytes:
     data = r.content
     if not data or len(data) < 50:
         raise HTTPException(status_code=422, detail="A letöltött kép üres vagy túl kicsi.")
-    return data
+
+    # ✅ normálás
+    fixed_name, fixed_bytes, fixed_mime = _normalize_image_bytes(name, data)
+    return fixed_name, fixed_bytes, fixed_mime
 
 
 # ----------------------------
@@ -227,12 +259,11 @@ async def _plantnet_identify(
     url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     files = [("images", (fn or "image.jpg", b, mt or "image/jpeg")) for (fn, b, mt) in images]
 
-    # ✅ Auto organs: ha nincs megadva, nem küldjük PlantNetnek (app Auto viselkedés)
     data = None
     organs_sent: Optional[str] = None
     if organs is not None and str(organs).strip() != "":
         organs_list = _normalize_organs_for_images(str(organs), len(images))
-        data = {"organs": organs_list}  # httpx ismételt multipart fieldként kezeli
+        data = {"organs": organs_list}
         organs_sent = str(organs).strip().lower()
 
     params = {"api-key": PLANTNET_API_KEY}
@@ -299,10 +330,8 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     if len(refs) > 5:
         raise HTTPException(status_code=422, detail="Túl sok kép. Max 5 kép / eset.")
 
-    # ✅ project: alapból env (weurope), de adhatsz override-ot, ha akarod
     project = (payload.get("project") or "").strip() or PLANTNET_PROJECT
 
-    # ✅ organs: Auto ha nincs megadva (None), különben elküldjük
     organs = payload.get("organs", None)
     if isinstance(organs, str) and organs.strip() == "":
         organs = None
@@ -322,8 +351,9 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
         dl = r.get("download_link")
         name = r.get("name") or f"image_{idx+1}.jpg"
         mime = r.get("mime_type") or _guess_mime(name)
-        data = await _download_bytes(dl)
-        images.append((name, data, mime))
+
+        fixed_name, fixed_bytes, fixed_mime = await _download_and_prepare(name, mime, dl)
+        images.append((fixed_name, fixed_bytes, fixed_mime))
 
     if not images:
         raise HTTPException(status_code=422, detail="Nem sikerült letölteni a képeket (üres lista).")
