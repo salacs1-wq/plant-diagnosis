@@ -1,10 +1,10 @@
 import os
 import re
-import base64
 import platform
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
+import anyio
 import httpx
 from fastapi import FastAPI, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # ----------------------------
 # Config
 # ----------------------------
-APP_VERSION = os.getenv("APP_VERSION", "1.1.9").strip()
+APP_VERSION = os.getenv("APP_VERSION", "1.2.0").strip()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
 PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()  # default: all
@@ -44,7 +44,7 @@ app.add_middleware(
 
 
 # ----------------------------
-# Global error handler (ne legyen néma 500)
+# Global error handler
 # ----------------------------
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -75,9 +75,8 @@ def _require_api_key() -> None:
         )
 
 
-def _normalize_organs_for_images(organs: Optional[str], image_count: int) -> List[str]:
-    organ = (organs or "").strip().lower() or "leaf"
-    return [organ] * max(1, image_count)
+def _httpx_timeout() -> httpx.Timeout:
+    return httpx.Timeout(DEFAULT_TIMEOUT, connect=DEFAULT_CONNECT_TIMEOUT)
 
 
 def _safe_json(resp: httpx.Response) -> Any:
@@ -96,6 +95,11 @@ def _guess_mime(filename: str, fallback: str = "image/jpeg") -> str:
     if name.endswith(".jpg") or name.endswith(".jpeg"):
         return "image/jpeg"
     return fallback
+
+
+def _normalize_organs_for_images(organs: Optional[str], image_count: int) -> List[str]:
+    organ = (organs or "").strip().lower() or "leaf"
+    return [organ] * max(1, image_count)
 
 
 def _compact_species_response(raw: Dict[str, Any], *, project: str, organs_sent: Optional[str]) -> Dict[str, Any]:
@@ -162,16 +166,25 @@ def _compact_disease_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _httpx_timeout() -> httpx.Timeout:
-    return httpx.Timeout(DEFAULT_TIMEOUT, connect=DEFAULT_CONNECT_TIMEOUT)
+# ----------------------------
+# Sync HTTP helpers (run in thread)
+# ----------------------------
+def _sync_get(url: str) -> httpx.Response:
+    with httpx.Client(timeout=_httpx_timeout(), follow_redirects=True) as client:
+        return client.get(url)
+
+
+def _sync_post(url: str, *, params: Dict[str, Any], data: Optional[List[Tuple[str, str]]] = None,
+              files: Optional[List[Tuple[str, Tuple[str, bytes, str]]]] = None) -> httpx.Response:
+    with httpx.Client(timeout=_httpx_timeout(), follow_redirects=True) as client:
+        return client.post(url, params=params, data=data, files=files)
 
 
 async def _download_bytes(url: str) -> bytes:
     if not url or not isinstance(url, str):
         raise HTTPException(status_code=422, detail="Hiányzik: download_link")
 
-    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
-        r = await client.get(url)
+    r = await anyio.to_thread.run_sync(_sync_get, url)
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -186,7 +199,7 @@ async def _download_bytes(url: str) -> bytes:
 
 
 # ----------------------------
-# PlantNet calls (NO shared client)
+# PlantNet calls (sync in thread)
 # ----------------------------
 async def _plantnet_identify(
     images: List[Tuple[str, bytes, str]],
@@ -197,7 +210,7 @@ async def _plantnet_identify(
     """
     /v2/identify/{project}
     api-key: query
-    organs: multipart form-data mező (ismételve képenként)  ✅
+    organs: multipart form-data mező (ismételve képenként) ✅
     """
     _require_api_key()
     if not images:
@@ -206,12 +219,21 @@ async def _plantnet_identify(
     url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     organs_list = _normalize_organs_for_images(organs, len(images))
 
+    # files: [("images", (filename, bytes, mime)), ...]
     files = [("images", (fn or "image.jpg", b, mt or "image/jpeg")) for (fn, b, mt) in images]
+
+    # data: [("organs","leaf"), ("organs","leaf"), ...]  (képenként)
     data = [("organs", o) for o in organs_list]
+
     params = {"api-key": PLANTNET_API_KEY}
 
-    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
-        r = await client.post(url, params=params, data=data, files=files)
+    r = await anyio.to_thread.run_sync(
+        _sync_post,
+        url,
+        params=params,
+        data=data,
+        files=files,
+    )
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -229,17 +251,21 @@ async def _plantnet_identify(
 async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str, Any]:
     """
     /v2/diseases/identify
-    api-key: query
-    NINCS organs, NINCS project  ✅
+    Csak api-key query param, NINCS organs, NINCS project ✅
     """
     _require_api_key()
 
     url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     params = {"api-key": PLANTNET_API_KEY}
-    files = {"images": (image[0] or "image.jpg", image[1], image[2] or "image/jpeg")}
+    files = [("images", (image[0] or "image.jpg", image[1], image[2] or "image/jpeg"))]
 
-    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
-        r = await client.post(url, params=params, files=files)
+    r = await anyio.to_thread.run_sync(
+        _sync_post,
+        url,
+        params=params,
+        data=None,
+        files=files,
+    )
 
     if r.status_code >= 400:
         raise HTTPException(
