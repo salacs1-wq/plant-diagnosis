@@ -6,22 +6,18 @@ import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import FastAPI, File, UploadFile, Query, Body, HTTPException, Request
+from fastapi import FastAPI, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 
 
 # ----------------------------
 # Config
 # ----------------------------
-APP_VERSION = os.getenv("APP_VERSION", "1.1.8").strip()
+APP_VERSION = os.getenv("APP_VERSION", "1.1.9").strip()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
-
-# default: all (app konzisztencia)
-PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()
-
+PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()  # default: all
 PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").rstrip("/")
 
 DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "45"))
@@ -32,25 +28,10 @@ DATA_URL_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-
-# ----------------------------
-# Lifespan: shared AsyncClient
-# ----------------------------
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    timeout = httpx.Timeout(DEFAULT_TIMEOUT, connect=DEFAULT_CONNECT_TIMEOUT)
-    app.state.http = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
-    try:
-        yield
-    finally:
-        await app.state.http.aclose()
-
-
 app = FastAPI(
     title="Növénydiagnosztikai API (PlantNet proxy)",
     version=APP_VERSION,
-    description="PlantNet proxy (identify + diseases) GPT-hez optimalizált válaszokkal.",
-    lifespan=lifespan,
+    description="PlantNet proxy /diagnose_files endpointdal (1–5 kép).",
 )
 
 app.add_middleware(
@@ -67,10 +48,8 @@ app.add_middleware(
 # ----------------------------
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    # Ha már HTTPException, azt FastAPI kezeli
     if isinstance(exc, HTTPException):
         raise exc
-
     return JSONResponse(
         status_code=500,
         content={
@@ -79,7 +58,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
                 "type": exc.__class__.__name__,
                 "message": str(exc),
                 "path": str(request.url.path),
-                "trace": traceback.format_exc().splitlines()[-20:],  # utolsó 20 sor
+                "trace": traceback.format_exc().splitlines()[-25:],
             }
         },
     )
@@ -99,34 +78,6 @@ def _require_api_key() -> None:
 def _normalize_organs_for_images(organs: Optional[str], image_count: int) -> List[str]:
     organ = (organs or "").strip().lower() or "leaf"
     return [organ] * max(1, image_count)
-
-
-def _decode_base64_image(image_base64: str) -> Tuple[bytes, str]:
-    image_base64 = (image_base64 or "").strip()
-    if not image_base64:
-        raise HTTPException(status_code=422, detail="Hiányzik: image_base64")
-
-    mime = "image/jpeg"
-    m = DATA_URL_RE.match(image_base64)
-    if m:
-        mime = m.group("mime").strip().lower()
-        image_base64 = m.group("data").strip()
-
-    image_base64 = re.sub(r"\s+", "", image_base64)
-
-    missing = len(image_base64) % 4
-    if missing:
-        image_base64 += "=" * (4 - missing)
-
-    try:
-        data = base64.b64decode(image_base64, validate=False)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Nem érvényes base64 (dekódolási hiba).")
-
-    if not data or len(data) < 50:
-        raise HTTPException(status_code=422, detail="A kép túl kicsi vagy üres (base64).")
-
-    return data, mime
 
 
 def _safe_json(resp: httpx.Response) -> Any:
@@ -211,13 +162,23 @@ def _compact_disease_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _httpx_timeout() -> httpx.Timeout:
+    return httpx.Timeout(DEFAULT_TIMEOUT, connect=DEFAULT_CONNECT_TIMEOUT)
+
+
 async def _download_bytes(url: str) -> bytes:
     if not url or not isinstance(url, str):
         raise HTTPException(status_code=422, detail="Hiányzik: download_link")
-    client: httpx.AsyncClient = app.state.http
-    r = await client.get(url)
+
+    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
+        r = await client.get(url)
+
     if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"stage": "download", "status": r.status_code, "text": r.text[:500]})
+        raise HTTPException(
+            status_code=502,
+            detail={"stage": "download", "status": r.status_code, "text": r.text[:500]},
+        )
+
     data = r.content
     if not data or len(data) < 50:
         raise HTTPException(status_code=422, detail="A letöltött kép üres vagy túl kicsi.")
@@ -225,7 +186,7 @@ async def _download_bytes(url: str) -> bytes:
 
 
 # ----------------------------
-# PlantNet calls
+# PlantNet calls (NO shared client)
 # ----------------------------
 async def _plantnet_identify(
     images: List[Tuple[str, bytes, str]],
@@ -235,22 +196,22 @@ async def _plantnet_identify(
 ) -> Dict[str, Any]:
     """
     /v2/identify/{project}
-    api-key query param
-    organs: multipart FORM mezőként, ismételve képenként
+    api-key: query
+    organs: multipart form-data mező (ismételve képenként)  ✅
     """
     _require_api_key()
     if not images:
         raise HTTPException(status_code=422, detail="Nincs kép az azonosításhoz.")
 
-    identify_url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
+    url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     organs_list = _normalize_organs_for_images(organs, len(images))
 
     files = [("images", (fn or "image.jpg", b, mt or "image/jpeg")) for (fn, b, mt) in images]
     data = [("organs", o) for o in organs_list]
     params = {"api-key": PLANTNET_API_KEY}
 
-    client: httpx.AsyncClient = app.state.http
-    r = await client.post(identify_url, params=params, data=data, files=files)
+    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
+        r = await client.post(url, params=params, data=data, files=files)
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -261,21 +222,24 @@ async def _plantnet_identify(
                 "plantnet_error": _safe_json(r),
             },
         )
+
     return r.json()
 
 
 async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str, Any]:
     """
     /v2/diseases/identify
-    Csak api-key query param, NINCS project, NINCS organs.
+    api-key: query
+    NINCS organs, NINCS project  ✅
     """
     _require_api_key()
+
     url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     params = {"api-key": PLANTNET_API_KEY}
     files = {"images": (image[0] or "image.jpg", image[1], image[2] or "image/jpeg")}
 
-    client: httpx.AsyncClient = app.state.http
-    r = await client.post(url, params=params, files=files)
+    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
+        r = await client.post(url, params=params, files=files)
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -286,6 +250,7 @@ async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str
                 "plantnet_error": _safe_json(r),
             },
         )
+
     return r.json()
 
 
@@ -337,7 +302,7 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     if not images:
         raise HTTPException(status_code=422, detail="Nem sikerült letölteni a képeket (üres lista).")
 
-    project = PLANTNET_PROJECT  # default: all
+    project = PLANTNET_PROJECT  # default all
 
     plant_raw = await _plantnet_identify(images, project=project, organs=organs)
     plant = _compact_species_response(plant_raw, project=project, organs_sent=organs)
