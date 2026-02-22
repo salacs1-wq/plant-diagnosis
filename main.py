@@ -1,5 +1,4 @@
 import os
-import re
 import platform
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
@@ -7,26 +6,24 @@ from typing import Any, Dict, List, Optional, Tuple
 import anyio
 import httpx
 from fastapi import FastAPI, Body, HTTPException, Request
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 
 # ----------------------------
 # Config
 # ----------------------------
-APP_VERSION = os.getenv("APP_VERSION", "1.2.1").strip()
+APP_VERSION = os.getenv("APP_VERSION", "1.2.3").strip()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
-PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()  # default: all
+
+# ✅ Default: weurope (Közép-Európa app módhoz konzisztens)
+PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope").strip()
+
 PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").rstrip("/")
 
 DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "45"))
 DEFAULT_CONNECT_TIMEOUT = float(os.getenv("HTTP_CONNECT_TIMEOUT", "15"))
-
-DATA_URL_RE = re.compile(
-    r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$",
-    re.IGNORECASE | re.DOTALL,
-)
 
 app = FastAPI(
     title="Növénydiagnosztikai API (PlantNet proxy)",
@@ -97,16 +94,27 @@ def _guess_mime(filename: str, fallback: str = "image/jpeg") -> str:
     return fallback
 
 
-def _normalize_organs_for_images(organs: Optional[str], image_count: int) -> List[str]:
-    organ = (organs or "").strip().lower() or "leaf"
+def _normalize_organs_for_images(organs: str, image_count: int) -> List[str]:
+    organ = (organs or "").strip().lower()
+    if not organ:
+        organ = "leaf"
     return [organ] * max(1, image_count)
 
 
-def _compact_species_response(raw: Dict[str, Any], *, project: str, organs_sent: Optional[str]) -> Dict[str, Any]:
+def _compact_species_response(
+    raw: Dict[str, Any],
+    *,
+    project: str,
+    organs_sent: Optional[str],
+) -> Dict[str, Any]:
+    """
+    ✅ Top3 és score 1:1 PlantNet results[].score alapján.
+    """
     results = raw.get("results") or []
     top_matches: List[Dict[str, Any]] = []
-    best = None
-    best_score = None
+
+    best = "ismeretlen"
+    best_score: Optional[float] = None
 
     for r in results[:5]:
         score = r.get("score")
@@ -118,15 +126,17 @@ def _compact_species_response(raw: Dict[str, Any], *, project: str, organs_sent:
         )
         if not sci:
             continue
-        if best is None:
-            best = sci
-            best_score = score
-        top_matches.append({"name": sci, "score": float(score) if score is not None else None})
 
-    top1 = float(best_score) if best_score is not None else None
+        s = float(score) if score is not None else None
+        top_matches.append({"name": sci, "score": s})
+
+        if best_score is None and s is not None:
+            best = sci
+            best_score = s
+
     return {
-        "bestMatch": best or "ismeretlen",
-        "confidence": {"top1_score": top1, "level": "species"},
+        "bestMatch": best,
+        "confidence": {"top1_score": best_score, "level": "species"},
         "topMatches": top_matches[:3],
         "meta": {"project": project, "organs_sent": organs_sent},
     }
@@ -135,13 +145,15 @@ def _compact_species_response(raw: Dict[str, Any], *, project: str, organs_sent:
 def _compact_disease_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     results = raw.get("results") or []
     top_matches: List[Dict[str, Any]] = []
-    best = None
-    best_score = None
+
+    best = "ismeretlen"
+    best_score: Optional[float] = None
 
     for r in results[:5]:
         score = r.get("score")
         disease = (r.get("disease") or {})
         pest = (r.get("pest") or {})
+
         name = (
             disease.get("code")
             or disease.get("name")
@@ -152,15 +164,17 @@ def _compact_disease_response(raw: Dict[str, Any]) -> Dict[str, Any]:
         )
         if not name:
             continue
-        if best is None:
-            best = str(name)
-            best_score = score
-        top_matches.append({"name": str(name), "score": float(score) if score is not None else None})
 
-    top1 = float(best_score) if best_score is not None else None
+        s = float(score) if score is not None else None
+        top_matches.append({"name": str(name), "score": s})
+
+        if best_score is None and s is not None:
+            best = str(name)
+            best_score = s
+
     return {
-        "bestMatch": best or "ismeretlen",
-        "confidence": {"top1_score": top1, "level": "disease_or_pest"},
+        "bestMatch": best,
+        "confidence": {"top1_score": best_score, "level": "disease_or_pest"},
         "topMatches": top_matches[:3],
         "meta": {},
     }
@@ -204,20 +218,24 @@ async def _plantnet_identify(
     images: List[Tuple[str, bytes, str]],
     *,
     project: str,
-    organs: Optional[str],
-) -> Dict[str, Any]:
+    organs: Optional[str],  # None => Auto (nem küldjük)
+) -> Tuple[Dict[str, Any], Optional[str]]:
     _require_api_key()
     if not images:
         raise HTTPException(status_code=422, detail="Nincs kép az azonosításhoz.")
 
     url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
-    organs_list = _normalize_organs_for_images(organs, len(images))
-
     files = [("images", (fn or "image.jpg", b, mt or "image/jpeg")) for (fn, b, mt) in images]
-    data = [("organs", o) for o in organs_list]
-    params = {"api-key": PLANTNET_API_KEY}
 
-    # ✅ csak pozíciós argumentumok
+    # ✅ Auto organs: ha nincs megadva, nem küldjük PlantNetnek (app Auto viselkedés)
+    data = None
+    organs_sent: Optional[str] = None
+    if organs is not None and str(organs).strip() != "":
+        organs_list = _normalize_organs_for_images(str(organs), len(images))
+        data = {"organs": organs_list}  # httpx ismételt multipart fieldként kezeli
+        organs_sent = str(organs).strip().lower()
+
+    params = {"api-key": PLANTNET_API_KEY}
     r = await anyio.to_thread.run_sync(_sync_post, url, params, data, files)
 
     if r.status_code >= 400:
@@ -230,7 +248,7 @@ async def _plantnet_identify(
             },
         )
 
-    return r.json()
+    return r.json(), organs_sent
 
 
 async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str, Any]:
@@ -240,7 +258,6 @@ async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str
     params = {"api-key": PLANTNET_API_KEY}
     files = [("images", (image[0] or "image.jpg", image[1], image[2] or "image/jpeg"))]
 
-    # ✅ diseases: nincs organs/project
     r = await anyio.to_thread.run_sync(_sync_post, url, params, None, files)
 
     if r.status_code >= 400:
@@ -282,7 +299,14 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     if len(refs) > 5:
         raise HTTPException(status_code=422, detail="Túl sok kép. Max 5 kép / eset.")
 
-    organs = (payload.get("organs") or "leaf").strip().lower() or "leaf"
+    # ✅ project: alapból env (weurope), de adhatsz override-ot, ha akarod
+    project = (payload.get("project") or "").strip() or PLANTNET_PROJECT
+
+    # ✅ organs: Auto ha nincs megadva (None), különben elküldjük
+    organs = payload.get("organs", None)
+    if isinstance(organs, str) and organs.strip() == "":
+        organs = None
+
     mode = (payload.get("mode") or "learning").strip().lower()
     if mode not in ("learning", "expert"):
         mode = "learning"
@@ -304,10 +328,8 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     if not images:
         raise HTTPException(status_code=422, detail="Nem sikerült letölteni a képeket (üres lista).")
 
-    project = PLANTNET_PROJECT  # default all
-
-    plant_raw = await _plantnet_identify(images, project=project, organs=organs)
-    plant = _compact_species_response(plant_raw, project=project, organs_sent=organs)
+    plant_raw, organs_sent = await _plantnet_identify(images, project=project, organs=organs)
+    plant = _compact_species_response(plant_raw, project=project, organs_sent=organs_sent)
 
     disease_raw = await _plantnet_diseases_identify(images[0])
     disease = _compact_disease_response(disease_raw)
@@ -320,7 +342,7 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
         "issueScore": disease["confidence"]["top1_score"],
         "topIssues": disease["topMatches"],
         "project": project,
-        "organsSent": organs,
+        "organsSent": organs_sent,
         "mode": mode,
         "caseType": case_type,
         "imageCount": len(images),
