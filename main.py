@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # ----------------------------
 # Config
 # ----------------------------
-APP_VERSION = os.getenv("APP_VERSION", "1.2.0").strip()
+APP_VERSION = os.getenv("APP_VERSION", "1.2.1").strip()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
 PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()  # default: all
@@ -174,8 +174,7 @@ def _sync_get(url: str) -> httpx.Response:
         return client.get(url)
 
 
-def _sync_post(url: str, *, params: Dict[str, Any], data: Optional[List[Tuple[str, str]]] = None,
-              files: Optional[List[Tuple[str, Tuple[str, bytes, str]]]] = None) -> httpx.Response:
+def _sync_post(url: str, params: Dict[str, Any], data, files) -> httpx.Response:
     with httpx.Client(timeout=_httpx_timeout(), follow_redirects=True) as client:
         return client.post(url, params=params, data=data, files=files)
 
@@ -207,11 +206,6 @@ async def _plantnet_identify(
     project: str,
     organs: Optional[str],
 ) -> Dict[str, Any]:
-    """
-    /v2/identify/{project}
-    api-key: query
-    organs: multipart form-data mező (ismételve képenként) ✅
-    """
     _require_api_key()
     if not images:
         raise HTTPException(status_code=422, detail="Nincs kép az azonosításhoz.")
@@ -219,21 +213,12 @@ async def _plantnet_identify(
     url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     organs_list = _normalize_organs_for_images(organs, len(images))
 
-    # files: [("images", (filename, bytes, mime)), ...]
     files = [("images", (fn or "image.jpg", b, mt or "image/jpeg")) for (fn, b, mt) in images]
-
-    # data: [("organs","leaf"), ("organs","leaf"), ...]  (képenként)
     data = [("organs", o) for o in organs_list]
-
     params = {"api-key": PLANTNET_API_KEY}
 
-    r = await anyio.to_thread.run_sync(
-        _sync_post,
-        url,
-        params=params,
-        data=data,
-        files=files,
-    )
+    # ✅ csak pozíciós argumentumok
+    r = await anyio.to_thread.run_sync(_sync_post, url, params, data, files)
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -249,23 +234,14 @@ async def _plantnet_identify(
 
 
 async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str, Any]:
-    """
-    /v2/diseases/identify
-    Csak api-key query param, NINCS organs, NINCS project ✅
-    """
     _require_api_key()
 
     url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     params = {"api-key": PLANTNET_API_KEY}
     files = [("images", (image[0] or "image.jpg", image[1], image[2] or "image/jpeg"))]
 
-    r = await anyio.to_thread.run_sync(
-        _sync_post,
-        url,
-        params=params,
-        data=None,
-        files=files,
-    )
+    # ✅ diseases: nincs organs/project
+    r = await anyio.to_thread.run_sync(_sync_post, url, params, None, files)
 
     if r.status_code >= 400:
         raise HTTPException(
