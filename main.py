@@ -13,11 +13,11 @@ from contextlib import asynccontextmanager
 # ----------------------------
 # Config
 # ----------------------------
-APP_VERSION = os.getenv("APP_VERSION", "1.1.6").strip()
+APP_VERSION = os.getenv("APP_VERSION", "1.1.7").strip()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
 
-# IMPORTANT: default legyen "all" (app konzisztencia)
+# Default legyen "all" (app konzisztencia)
 PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "all").strip()
 
 PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").rstrip("/")
@@ -72,23 +72,11 @@ def _require_api_key() -> None:
 
 
 def _normalize_organs_for_images(organs: Optional[str], image_count: int) -> List[str]:
-    """
-    PlantNet identify: organs tipikusan képenként értendő.
-    Mi egyszerűsítünk: ha van organs string, ugyanazzal töltjük fel minden képre.
-    Default: leaf.
-    """
     organ = (organs or "").strip().lower() or "leaf"
     return [organ] * max(1, image_count)
 
 
 def _decode_base64_image(image_base64: str) -> Tuple[bytes, str]:
-    """
-    Elfogad:
-      - tiszta base64 stringet
-      - data URL-t: data:image/jpeg;base64,...
-    Javítja a paddingot (====) ha hiányzik.
-    Visszaad: (bytes, mime)
-    """
     image_base64 = (image_base64 or "").strip()
     if not image_base64:
         raise HTTPException(status_code=422, detail="Hiányzik: image_base64")
@@ -145,13 +133,11 @@ def _compact_species_response(raw: Dict[str, Any], *, project: str, organs_sent:
         top_matches.append({"name": sci, "score": float(score) if score is not None else None})
 
     top1 = float(best_score) if best_score is not None else None
-    level = "species"
-
     return {
         "bestMatch": best or "ismeretlen",
-        "confidence": {"top1_score": top1, "level": level},
+        "confidence": {"top1_score": top1, "level": "species"},
         "topMatches": top_matches[:3],
-        "meta": {"project": project, "organs_sent": organs_sent},
+        "meta": {"project": project, "language": "en", "organs_sent": organs_sent},
     }
 
 
@@ -163,8 +149,6 @@ def _compact_disease_response(raw: Dict[str, Any], *, project_sent: Optional[str
 
     for r in results[:5]:
         score = r.get("score")
-        # PlantNet diseases: gyakran 'disease' vagy 'pest' kulcsokkal jön
-        # Egyszerű: name = r.get("disease",{}).get("code") vagy r.get("name") fallback.
         disease = (r.get("disease") or {})
         pest = (r.get("pest") or {})
         name = (
@@ -183,11 +167,9 @@ def _compact_disease_response(raw: Dict[str, Any], *, project_sent: Optional[str
         top_matches.append({"name": str(name), "score": float(score) if score is not None else None})
 
     top1 = float(best_score) if best_score is not None else None
-    level = "disease_or_pest"
-
     return {
         "bestMatch": best or "ismeretlen",
-        "confidence": {"top1_score": top1, "level": level},
+        "confidence": {"top1_score": top1, "level": "disease_or_pest"},
         "topMatches": top_matches[:3],
         "meta": {"project": project_sent},
     }
@@ -231,7 +213,7 @@ async def _plantnet_identify(
 ) -> Dict[str, Any]:
     """
     /v2/identify/{project}
-    organs: adjuk tovább (default leaf), mert ez közelíti az app viselkedését.
+    FONTOS: organs NEM query param nálad, hanem multipart FORM mező.
     """
     _require_api_key()
     if not images:
@@ -240,17 +222,18 @@ async def _plantnet_identify(
     identify_url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     organs_list = _normalize_organs_for_images(organs, len(images))
 
-    # httpx files: list of ("images", (filename, bytes, mime))
     files = []
     for (fn, b, mt) in images:
         files.append(("images", (fn or "image.jpg", b, mt or "image/jpeg")))
 
-    # PlantNet identify esetén az organs mehet query-ben is; ez stabil volt nálatok.
-    # Fontos: organs list -> ismétlődő query param.
-    params: Dict[str, Any] = {"api-key": PLANTNET_API_KEY, "organs": organs_list}
+    # ✅ organs form-data mezőként (ismételve képenként)
+    data = [("organs", o) for o in organs_list]
+
+    # ✅ api-key marad query-ben
+    params = {"api-key": PLANTNET_API_KEY}
 
     client: httpx.AsyncClient = app.state.http
-    r = await client.post(identify_url, params=params, files=files)
+    r = await client.post(identify_url, params=params, data=data, files=files)
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -261,7 +244,6 @@ async def _plantnet_identify(
                 "plantnet_error": _safe_json(r),
             },
         )
-
     return r.json()
 
 
@@ -270,17 +252,12 @@ async def _plantnet_diseases_identify(
 ) -> Dict[str, Any]:
     """
     /v2/diseases/identify
-    FONTOS: NEM küldünk project paramot (PlantNet 400 'project not allowed' gyakori).
-    FONTOS: NEM küldünk organs paramot (PlantNet 400 'organs not allowed' volt).
+    FONTOS: csak api-key query, NINCS project, NINCS organs.
     """
     _require_api_key()
-
     diseases_url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
 
-    files = {
-        "images": (image[0] or "image.jpg", image[1], image[2] or "image/jpeg")
-    }
-
+    files = {"images": (image[0] or "image.jpg", image[1], image[2] or "image/jpeg")}
     params = {"api-key": PLANTNET_API_KEY}
 
     client: httpx.AsyncClient = app.state.http
@@ -363,66 +340,15 @@ async def identifyDiseaseB64(payload: Dict[str, Any] = Body(...)):
     return _compact_disease_response(raw, project_sent=None)
 
 
-@app.post("/diagnose")
-async def diagnose(
-    image: UploadFile = File(...),
-    organs: Optional[str] = Query(default="leaf"),
-    project: str = Query(default=PLANTNET_PROJECT),
-):
-    img_bytes = await image.read()
-    if not img_bytes or len(img_bytes) < 50:
-        raise HTTPException(status_code=422, detail="A feltöltött kép üres vagy túl kicsi.")
-
-    mime = image.content_type or _guess_mime(image.filename or "")
-    images = [(image.filename or "image.jpg", img_bytes, mime)]
-
-    plant_raw = await _plantnet_identify(images, project=project, organs=organs)
-    dis_raw = await _plantnet_diseases_identify(images[0])
-
-    plant = _compact_species_response(plant_raw, project=project, organs_sent=(organs or "leaf"))
-    disease = _compact_disease_response(dis_raw, project_sent=None)
-
-    summary = {
-        "bestPlant": plant["bestMatch"],
-        "plantScore": plant["confidence"]["top1_score"],
-        "topPlants": plant["topMatches"],
-        "bestIssue": disease["bestMatch"],
-        "issueScore": disease["confidence"]["top1_score"],
-        "topIssues": disease["topMatches"],
-        "project": project,
-        "organsSent": (organs or "leaf"),
-        "mode": "learning",
-        "caseType": "auto",
-        "imageCount": 1,
-    }
-
-    return {"plant": plant, "diseaseOrPest": disease, "summary": summary}
-
-
 @app.post("/diagnose_files")
 async def diagnose_files(payload: Dict[str, Any] = Body(...)):
-    """
-    GPT Actions endpoint.
-    VÁRT PAYLOAD (példa):
-    {
-      "openaiFileIdRefs":[{"name":"x.jpg","download_link":"https://..."}],
-      "organs":"leaf",
-      "mode":"learning",
-      "caseType":"weed"
-    }
-
-    FONTOS: project-et NEM várunk itt (ne küldje a GPT).
-    Project szerver oldalon default: PLANTNET_PROJECT (default all).
-    """
     refs = payload.get("openaiFileIdRefs") or []
     if not isinstance(refs, list) or len(refs) < 1:
         raise HTTPException(status_code=422, detail="Hiányzik: openaiFileIdRefs (min 1 kép).")
     if len(refs) > 5:
         raise HTTPException(status_code=422, detail="Túl sok kép. Max 5 kép / eset.")
 
-    # organs default leaf (EZ A LÉNYEG a Bromus/Allium eltéréshez)
     organs = (payload.get("organs") or "leaf").strip().lower() or "leaf"
-
     mode = (payload.get("mode") or "learning").strip().lower()
     if mode not in ("learning", "expert"):
         mode = "learning"
@@ -431,7 +357,6 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     if case_type not in ("weed", "disease", "pest"):
         case_type = "weed"
 
-    # letöltjük a képeket
     images: List[Tuple[str, bytes, str]] = []
     for idx, r in enumerate(refs):
         if not isinstance(r, dict):
@@ -447,12 +372,9 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
 
     project = PLANTNET_PROJECT  # default "all"
 
-    # NÖVÉNYAZONOSÍTÁS: több képet is küldünk, organs=leaf ismételve.
     plant_raw = await _plantnet_identify(images, project=project, organs=organs)
     plant = _compact_species_response(plant_raw, project=project, organs_sent=organs)
 
-    # BETEGSÉG/KÁRTEVŐ: PlantNet diseases tipikusan 1 képre van optimalizálva.
-    # A legelső képet használjuk.
     disease_raw = await _plantnet_diseases_identify(images[0])
     disease = _compact_disease_response(disease_raw, project_sent=None)
 
