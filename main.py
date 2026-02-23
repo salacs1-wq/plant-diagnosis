@@ -1,3 +1,9 @@
+# main.py  (v1.3.0) — TELJES, EGYBEN MÁSOLHATÓ
+# Default PlantNet project: k-middle-europe
+# Default organs: None (Auto) → nem küldjük a PlantNetnek
+# Swaggerben fájlfeltöltés: /identify és /diagnose
+# GPT/OpenAI fájlokhoz: /diagnose_files (openaiFileIdRefs)
+
 import os
 import platform
 import traceback
@@ -10,19 +16,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 
-APP_VERSION = os.getenv("APP_VERSION", "1.2.6").strip()
+# ----------------------------
+# Config
+# ----------------------------
+APP_VERSION = os.getenv("APP_VERSION", "1.3.0").strip()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
-PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope").strip()
+PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "k-middle-europe").strip()
 PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").rstrip("/")
 
 DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "45"))
 DEFAULT_CONNECT_TIMEOUT = float(os.getenv("HTTP_CONNECT_TIMEOUT", "15"))
 
 app = FastAPI(
-    title="Növénydiagnosztikai API (PlantNet proxy)",
+    title="Plant Diagnosis API (PlantNet proxy)",
     version=APP_VERSION,
-    description="PlantNet proxy /identify, /diagnose, /diagnose_files endpointokkal.",
+    description=(
+        "PlantNet proxy FastAPI.\n\n"
+        "- /identify: fajazonosítás (multipart file upload)\n"
+        "- /diagnose: faj + betegség/kártevő (multipart file upload)\n"
+        "- /diagnose_files: OpenAI file refs → letöltés → PlantNet"
+    ),
 )
 
 app.add_middleware(
@@ -34,6 +48,9 @@ app.add_middleware(
 )
 
 
+# ----------------------------
+# Error handler
+# ----------------------------
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, HTTPException):
@@ -52,15 +69,18 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
+# ----------------------------
+# Helpers
+# ----------------------------
 def _require_api_key() -> None:
     if not PLANTNET_API_KEY:
         raise HTTPException(
             status_code=500,
-            detail="Hiányzik a PLANTNET_API_KEY környezeti változó (Render -> Environment).",
+            detail="Hiányzik a PLANTNET_API_KEY környezeti változó (Render → Environment).",
         )
 
 
-def _httpx_timeout() -> httpx.Timeout:
+def _timeout() -> httpx.Timeout:
     return httpx.Timeout(DEFAULT_TIMEOUT, connect=DEFAULT_CONNECT_TIMEOUT)
 
 
@@ -173,7 +193,7 @@ async def _download_image_bytes(download_link: str) -> bytes:
     if not download_link:
         raise HTTPException(status_code=422, detail="Hiányzik: download_link")
 
-    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=_timeout(), follow_redirects=True) as client:
         r = await client.get(download_link)
 
     if r.status_code >= 400:
@@ -192,7 +212,7 @@ async def _plantnet_identify(
     images: List[Tuple[str, bytes, str]],
     *,
     project: str,
-    organs: Optional[str],
+    organs: Optional[str],  # None => Auto (nem küldjük)
 ) -> Tuple[Dict[str, Any], Optional[str]]:
     _require_api_key()
     if not images:
@@ -200,6 +220,8 @@ async def _plantnet_identify(
 
     url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     params = {"api-key": PLANTNET_API_KEY}
+
+    # PlantNet: több kép → ismételt "images" mező
     files = [("images", (fn or "image.jpg", b, mt or "image/jpeg")) for (fn, b, mt) in images]
 
     data = None
@@ -209,7 +231,7 @@ async def _plantnet_identify(
         data = {"organs": organs_list}
         organs_sent = str(organs).strip().lower()
 
-    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=_timeout(), follow_redirects=True) as client:
         r = await client.post(url, params=params, data=data, files=files)
 
     if r.status_code >= 400:
@@ -227,11 +249,12 @@ async def _plantnet_identify(
 
 async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str, Any]:
     _require_api_key()
+
     url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     params = {"api-key": PLANTNET_API_KEY}
     files = [("images", (image[0] or "image.jpg", image[1], image[2] or "image/jpeg"))]
 
-    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=_timeout(), follow_redirects=True) as client:
         r = await client.post(url, params=params, files=files)
 
     if r.status_code >= 400:
@@ -243,16 +266,20 @@ async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str
                 "plantnet_error": _safe_json(r),
             },
         )
+
     return r.json()
 
 
+# ----------------------------
+# Routes
+# ----------------------------
 @app.get("/")
-async def root() -> Dict[str, Any]:
+async def root() -> Dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/health")
-async def health() -> Dict[str, Any]:
+async def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
@@ -261,12 +288,11 @@ async def version() -> Dict[str, Any]:
     return {"version": APP_VERSION, "python": platform.python_version(), "httpx": httpx.__version__}
 
 
-# ✅ Swaggerben feltölthető
 @app.post("/identify")
 async def identify(
     image: UploadFile = File(...),
     project: str = Query(default=PLANTNET_PROJECT),
-    organs: Optional[str] = Query(default=None),
+    organs: Optional[str] = Query(default=None),  # default None => Auto (nem küldjük)
 ):
     img_bytes = await image.read()
     if not img_bytes or len(img_bytes) < 50:
@@ -280,16 +306,20 @@ async def identify(
 
     return {
         "plant": plant,
-        "debug": {"sha256": _sha256_hex(img_bytes), "byte_len": len(img_bytes), "project": project, "organsSent": organs_sent},
+        "debug": {
+            "sha256": _sha256_hex(img_bytes),
+            "byte_len": len(img_bytes),
+            "project": project,
+            "organsSent": organs_sent,
+        },
     }
 
 
-# ✅ Swaggerben feltölthető
 @app.post("/diagnose")
 async def diagnose(
     image: UploadFile = File(...),
     project: str = Query(default=PLANTNET_PROJECT),
-    organs: Optional[str] = Query(default=None),
+    organs: Optional[str] = Query(default=None),  # default None => Auto
     mode: str = Query(default="learning"),
     caseType: str = Query(default="weed"),
 ):
@@ -325,11 +355,15 @@ async def diagnose(
         "plant": plant,
         "diseaseOrPest": disease,
         "summary": summary,
-        "debug": {"sha256": _sha256_hex(img_bytes), "byte_len": len(img_bytes), "project": project, "organsSent": organs_sent},
+        "debug": {
+            "sha256": _sha256_hex(img_bytes),
+            "byte_len": len(img_bytes),
+            "project": project,
+            "organsSent": organs_sent,
+        },
     }
 
 
-# GPT / OpenAI file link út
 @app.post("/diagnose_files")
 async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     refs = payload.get("openaiFileIdRefs") or []
@@ -342,7 +376,7 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
 
     organs = payload.get("organs", None)
     if isinstance(organs, str) and organs.strip() == "":
-        organs = None
+        organs = None  # Auto
 
     mode = (payload.get("mode") or "learning").strip().lower()
     if mode not in ("learning", "expert"):
@@ -358,13 +392,17 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     for idx, r in enumerate(refs):
         if not isinstance(r, dict):
             continue
+
         dl = r.get("download_link")
         name = r.get("name") or f"image_{idx+1}.jpg"
         mime = r.get("mime_type") or _guess_mime(name)
 
         img_bytes = await _download_image_bytes(dl)
+
         images.append((name, img_bytes, mime))
-        image_debug.append({"name": name, "mime": mime, "sha256": _sha256_hex(img_bytes), "byte_len": len(img_bytes)})
+        image_debug.append(
+            {"name": name, "mime": mime, "sha256": _sha256_hex(img_bytes), "byte_len": len(img_bytes)}
+        )
 
     if not images:
         raise HTTPException(status_code=422, detail="Nem sikerült letölteni a képeket (üres lista).")
