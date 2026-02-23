@@ -1,21 +1,18 @@
 import os
 import platform
 import traceback
-from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
-import anyio
 import httpx
 from fastapi import FastAPI, Body, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from PIL import Image, ImageOps
 
 
 # ----------------------------
 # Config
 # ----------------------------
-APP_VERSION = os.getenv("APP_VERSION", "1.2.4").strip()
+APP_VERSION = os.getenv("APP_VERSION", "1.2.5").strip()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
 PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope").strip()
@@ -23,10 +20,6 @@ PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org"
 
 DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "45"))
 DEFAULT_CONNECT_TIMEOUT = float(os.getenv("HTTP_CONNECT_TIMEOUT", "15"))
-
-# ✅ képnormálás kapcsoló (ha valaha ki akarod kapcsolni)
-NORMALIZE_IMAGES = os.getenv("NORMALIZE_IMAGES", "1").strip() not in ("0", "false", "False")
-
 
 app = FastAPI(
     title="Növénydiagnosztikai API (PlantNet proxy)",
@@ -102,35 +95,6 @@ def _normalize_organs_for_images(organs: str, image_count: int) -> List[str]:
     if not organ:
         organ = "leaf"
     return [organ] * max(1, image_count)
-
-
-def _normalize_image_bytes(name: str, data: bytes) -> Tuple[str, bytes, str]:
-    """
-    ✅ App-szerű normálás:
-    - EXIF transpose (helyes forgatás)
-    - RGB
-    - egységes JPEG újramentés (quality=92)
-    """
-    if not NORMALIZE_IMAGES:
-        return name, data, _guess_mime(name)
-
-    try:
-        img = Image.open(BytesIO(data))
-        img = ImageOps.exif_transpose(img)
-        if img.mode not in ("RGB",):
-            img = img.convert("RGB")
-
-        out = BytesIO()
-        img.save(out, format="JPEG", quality=92, optimize=True)
-        out_bytes = out.getvalue()
-
-        # név/mime egységesítése
-        base = (name or "image").rsplit(".", 1)[0]
-        fixed_name = f"{base}.jpg"
-        return fixed_name, out_bytes, "image/jpeg"
-    except Exception:
-        # ha valamiért nem sikerül, essünk vissza nyersre
-        return name, data, _guess_mime(name)
 
 
 def _compact_species_response(
@@ -209,24 +173,12 @@ def _compact_disease_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# ----------------------------
-# Sync HTTP helpers (run in thread)
-# ----------------------------
-def _sync_get(url: str) -> httpx.Response:
-    with httpx.Client(timeout=_httpx_timeout(), follow_redirects=True) as client:
-        return client.get(url)
-
-
-def _sync_post(url: str, params: Dict[str, Any], data, files) -> httpx.Response:
-    with httpx.Client(timeout=_httpx_timeout(), follow_redirects=True) as client:
-        return client.post(url, params=params, data=data, files=files)
-
-
-async def _download_and_prepare(name: str, mime: str, url: str) -> Tuple[str, bytes, str]:
-    if not url or not isinstance(url, str):
+async def _download_image_bytes(download_link: str) -> bytes:
+    if not download_link:
         raise HTTPException(status_code=422, detail="Hiányzik: download_link")
 
-    r = await anyio.to_thread.run_sync(_sync_get, url)
+    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
+        r = await client.get(download_link)
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -237,15 +189,9 @@ async def _download_and_prepare(name: str, mime: str, url: str) -> Tuple[str, by
     data = r.content
     if not data or len(data) < 50:
         raise HTTPException(status_code=422, detail="A letöltött kép üres vagy túl kicsi.")
-
-    # ✅ normálás
-    fixed_name, fixed_bytes, fixed_mime = _normalize_image_bytes(name, data)
-    return fixed_name, fixed_bytes, fixed_mime
+    return data
 
 
-# ----------------------------
-# PlantNet calls (sync in thread)
-# ----------------------------
 async def _plantnet_identify(
     images: List[Tuple[str, bytes, str]],
     *,
@@ -257,6 +203,9 @@ async def _plantnet_identify(
         raise HTTPException(status_code=422, detail="Nincs kép az azonosításhoz.")
 
     url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
+    params = {"api-key": PLANTNET_API_KEY}
+
+    # ✅ PlantNet elvárt forma több képnél:
     files = [("images", (fn or "image.jpg", b, mt or "image/jpeg")) for (fn, b, mt) in images]
 
     data = None
@@ -266,8 +215,8 @@ async def _plantnet_identify(
         data = {"organs": organs_list}
         organs_sent = str(organs).strip().lower()
 
-    params = {"api-key": PLANTNET_API_KEY}
-    r = await anyio.to_thread.run_sync(_sync_post, url, params, data, files)
+    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
+        r = await client.post(url, params=params, data=data, files=files)
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -289,7 +238,8 @@ async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str
     params = {"api-key": PLANTNET_API_KEY}
     files = [("images", (image[0] or "image.jpg", image[1], image[2] or "image/jpeg"))]
 
-    r = await anyio.to_thread.run_sync(_sync_post, url, params, None, files)
+    async with httpx.AsyncClient(timeout=_httpx_timeout(), follow_redirects=True) as client:
+        r = await client.post(url, params=params, files=files)
 
     if r.status_code >= 400:
         raise HTTPException(
@@ -352,8 +302,8 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
         name = r.get("name") or f"image_{idx+1}.jpg"
         mime = r.get("mime_type") or _guess_mime(name)
 
-        fixed_name, fixed_bytes, fixed_mime = await _download_and_prepare(name, mime, dl)
-        images.append((fixed_name, fixed_bytes, fixed_mime))
+        img_bytes = await _download_image_bytes(dl)
+        images.append((name, img_bytes, mime))
 
     if not images:
         raise HTTPException(status_code=422, detail="Nem sikerült letölteni a képeket (üres lista).")
