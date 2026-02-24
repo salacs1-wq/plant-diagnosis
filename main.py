@@ -397,7 +397,7 @@ async def _diagnose_core(*, images: List[Tuple[str, bytes, str]], project: str, 
             "imageCount": len(images),
             "notes": ["weed mód: csak növényazonosítás fut"],
         }
-        return {"plant": plant, "diseaseOrPest": issue, "summary": summary}
+return {"plant": plant, "diseaseOrPest": issue, "summary": summary}
 
     # disease/pest -> diseases jelzés + növény háttér
     disease_raw = await _plantnet_diseases_identify(images[0])
