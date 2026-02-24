@@ -11,20 +11,20 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 
-# ----------------------------
-# Config
-# ----------------------------
-APP_VERSION = os.getenv("APP_VERSION", "1.2.2").strip()
+# =========================================================
+# CONFIG
+# =========================================================
+APP_VERSION = os.getenv("APP_VERSION", "1.2.3").strip()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
-
-# Fontos: alapból a közép-európai projekt legyen
-PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "k-middle-europe").strip()
-
+PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "k-middle-europe").strip()  # default: közép-európa
 PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").rstrip("/")
 
 DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "45"))
 DEFAULT_CONNECT_TIMEOUT = float(os.getenv("HTTP_CONNECT_TIMEOUT", "15"))
+
+# Pest módban: ha issueScore ez alatt van, ne mutassunk "kórkép-kód" listát (fantom zajt csökkent)
+PEST_MIN_ISSUE_SCORE = float(os.getenv("PEST_MIN_ISSUE_SCORE", "0.45"))
 
 DATA_URL_RE = re.compile(
     r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$",
@@ -34,7 +34,12 @@ DATA_URL_RE = re.compile(
 app = FastAPI(
     title="Növénydiagnosztikai API (PlantNet proxy)",
     version=APP_VERSION,
-    description="PlantNet proxy: /identify (file), /diagnose (file), /diagnose_files (OpenAI file refs).",
+    description=(
+        "PlantNet proxy API.\n\n"
+        "Fontos: a /v2/diseases/identify által visszaadott 4–8 betűs 'kódok' "
+        "NEM hivatalos kórtani azonosítók (csak jelzések/döntéstámogatás). "
+        "A végső szakmai döntést a felhasználó (növényorvos) hozza."
+    ),
 )
 
 app.add_middleware(
@@ -46,9 +51,9 @@ app.add_middleware(
 )
 
 
-# ----------------------------
-# Global error handler
-# ----------------------------
+# =========================================================
+# GLOBAL ERROR HANDLER
+# =========================================================
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, HTTPException):
@@ -67,9 +72,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ----------------------------
-# Helpers
-# ----------------------------
+# =========================================================
+# HELPERS
+# =========================================================
 def _require_api_key() -> None:
     if not PLANTNET_API_KEY:
         raise HTTPException(
@@ -102,7 +107,7 @@ def _guess_mime(filename: str, fallback: str = "image/jpeg") -> str:
 
 def _normalize_organs_for_images(organs: Optional[str], image_count: int) -> Optional[List[str]]:
     """
-    PlantNet 'organs' paraméter kényes lehet (projektfüggő).
+    PlantNet 'organs' paraméter projektenként/kontextusban kényes lehet.
     Alapból NEM küldjük. Csak ha explicit meg van adva.
     """
     if organs is None:
@@ -138,54 +143,83 @@ def _compact_species_response(raw: Dict[str, Any], *, project: str, organs_sent:
     return {
         "bestMatch": best or "ismeretlen",
         "confidence": {"top1_score": top1, "level": "species"},
-        # TOP5-öt adunk vissza (ha PlantNet ad annyit)
+        # max 5 (ha PlantNet csak 3-at ad, akkor 3 marad)
         "topMatches": top_matches[:5],
         "meta": {"project": project, "organs_sent": organs_sent},
     }
 
 
+def _is_code_like(s: str) -> bool:
+    """
+    Egyszerű heurisztika: 4–8 nagybetűs/ szám kód jelleg.
+    """
+    if not s:
+        return False
+    ss = s.strip()
+    if len(ss) < 4 or len(ss) > 8:
+        return False
+    return all(ch.isupper() or ch.isdigit() or ch == "_" for ch in ss)
+
+
 def _compact_disease_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     """
-    PlantNet diseases endpoint kimenete eltérhet; itt robusztus kiolvasás.
-    A 'name' lehet kód (pl. SEPTTR) vagy név.
+    PlantNet diseases endpoint kimenete eltérhet.
+    Itt 'bestMatch' lehet kód (pl. SEPTTR, FUSAME).
+    Magyarítás: ha nincs mapping, jelezzük, hogy kód.
     """
     results = raw.get("results") or []
     top_matches: List[Dict[str, Any]] = []
     best = None
     best_score = None
 
-    for r in results[:5]:
+    for r in results[:10]:  # többet beolvasunk, de max 5-öt adunk vissza
         score = r.get("score")
         disease = (r.get("disease") or {})
         pest = (r.get("pest") or {})
 
-        name = (
+        code_or_name = (
             disease.get("code")
             or disease.get("name")
             or pest.get("code")
             or pest.get("name")
-            or r.get("name")
             or r.get("code")
+            or r.get("name")
         )
-        if not name:
+        if not code_or_name:
             continue
-        if best is None:
-            best = str(name)
-            best_score = score
-        top_matches.append({"name": str(name), "score": float(score) if score is not None else None})
 
+        name = str(code_or_name).strip()
+        if best is None:
+            best = name
+            best_score = score
+
+        top_matches.append(
+            {
+                "name": name,
+                "name_hu": f"{name} – (kód, fordítás nincs)" if _is_code_like(name) else name,
+                "score": float(score) if score is not None else None,
+            }
+        )
+
+    top_matches = top_matches[:5]
     top1 = float(best_score) if best_score is not None else None
+
+    best_hu = None
+    if best:
+        best_hu = f"{best} – (kód, fordítás nincs)" if _is_code_like(best) else best
+
     return {
         "bestMatch": best or "ismeretlen",
+        "bestMatch_hu": best_hu or "ismeretlen",
         "confidence": {"top1_score": top1, "level": "disease_or_pest"},
-        "topMatches": top_matches[:5],
-        "meta": {},
+        "topMatches": top_matches,
+        "meta": {"non_official_codes": True},
     }
 
 
-# ----------------------------
-# Sync HTTP helpers (run in thread)
-# ----------------------------
+# =========================================================
+# SYNC HTTP HELPERS (run in thread)
+# =========================================================
 def _sync_get(url: str) -> httpx.Response:
     with httpx.Client(timeout=_httpx_timeout(), follow_redirects=True) as client:
         return client.get(url)
@@ -214,9 +248,9 @@ async def _download_bytes(url: str) -> bytes:
     return data
 
 
-# ----------------------------
-# PlantNet calls (sync in thread)
-# ----------------------------
+# =========================================================
+# PLANTNET CALLS (sync in thread)
+# =========================================================
 async def _plantnet_identify(
     images: List[Tuple[str, bytes, str]],
     *,
@@ -257,7 +291,7 @@ async def _plantnet_identify(
 async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str, Any]:
     _require_api_key()
 
-    # Fontos: diseases endpoint NEM fogad project/organs paramétert
+    # diseases endpoint NEM fogad project/organs paramétert
     url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
     params = {"api-key": PLANTNET_API_KEY}
     files = [("images", (image[0] or "image.jpg", image[1], image[2] or "image/jpeg"))]
@@ -277,9 +311,9 @@ async def _plantnet_diseases_identify(image: Tuple[str, bytes, str]) -> Dict[str
     return r.json()
 
 
-# ----------------------------
-# Routes
-# ----------------------------
+# =========================================================
+# ROUTES: health/version
+# =========================================================
 @app.get("/")
 async def root() -> Dict[str, Any]:
     return {"status": "ok"}
@@ -295,9 +329,9 @@ async def version() -> Dict[str, Any]:
     return {"version": APP_VERSION, "python": platform.python_version(), "httpx": httpx.__version__}
 
 
-# ----------------------------
-# File upload endpoints (Swagger teszthez is jó)
-# ----------------------------
+# =========================================================
+# FILE UPLOAD ENDPOINTS (Swagger/Chrome tesztre)
+# =========================================================
 @app.post("/identify")
 async def identify(
     image: UploadFile = File(...),
@@ -351,9 +385,9 @@ async def diagnose(
     )
 
 
-# ----------------------------
-# Core logic (3 út valódi szétválasztása)
-# ----------------------------
+# =========================================================
+# CORE LOGIC: 3 utak (weed/disease/pest)
+# =========================================================
 async def _diagnose_core(
     *,
     images: List[Tuple[str, bytes, str]],
@@ -362,13 +396,9 @@ async def _diagnose_core(
     mode: str,
     case_type: str,
 ) -> Dict[str, Any]:
-    # 3 út:
     # weed   -> csak növény
-    # disease-> csak kórkép (növény háttér)
-    # pest   -> kártevő/kártétel jel (diseases endpoint), növény háttér
-
-    plant = None
-    disease = None
+    # disease-> kórkép + növény háttér
+    # pest   -> kártevő/kártétel jelzés (diseases endpoint), de szűrjük a zajt score alapján
 
     if case_type == "weed":
         plant_raw = await _plantnet_identify(images, project=project, organs=organs)
@@ -379,6 +409,7 @@ async def _diagnose_core(
             "plantScore": plant["confidence"]["top1_score"],
             "topPlants": plant["topMatches"],
             "bestIssue": "n/a",
+            "bestIssue_hu": None,
             "issueScore": None,
             "topIssues": [],
             "project": project,
@@ -386,23 +417,40 @@ async def _diagnose_core(
             "mode": mode,
             "caseType": case_type,
             "imageCount": len(images),
+            "notes": ["weed mód: csak növényazonosítás fut"],
         }
         return {"plant": plant, "diseaseOrPest": None, "summary": summary}
 
-    # disease / pest:
-    # - diseases endpoint 1 képpel (az első kép)
+    # disease / pest: diseases endpoint 1 képpel (az első kép)
     disease_raw = await _plantnet_diseases_identify(images[0])
     disease = _compact_disease_response(disease_raw)
 
-    # növény csak háttér (de hasznos)
+    # növény háttér (segít a kontextusban)
     plant_raw = await _plantnet_identify(images, project=project, organs=organs)
     plant = _compact_species_response(plant_raw, project=project, organs_sent=(organs if organs else None))
+
+    # PEST szűrő: ha alacsony a score, ne listázzunk kódokat (fantom zaj)
+    if case_type == "pest":
+        issue_score = disease["confidence"]["top1_score"] or 0.0
+        if issue_score < PEST_MIN_ISSUE_SCORE:
+            disease = {
+                "bestMatch": "n/a",
+                "bestMatch_hu": "nincs elég biztos kártevő/kártétel jelzés",
+                "confidence": {"top1_score": None, "level": "disease_or_pest"},
+                "topMatches": [],
+                "meta": {"filtered": True, "reason": f"issueScore<{PEST_MIN_ISSUE_SCORE}"},
+            }
+
+    notes = []
+    if case_type in ("disease", "pest"):
+        notes.append("A kórkép/kártevő modul jelzéseket ad; a 4–8 betűs kódok nem hivatalosak.")
 
     summary = {
         "bestPlant": plant["bestMatch"],
         "plantScore": plant["confidence"]["top1_score"],
         "topPlants": plant["topMatches"],
         "bestIssue": disease["bestMatch"],
+        "bestIssue_hu": disease.get("bestMatch_hu"),
         "issueScore": disease["confidence"]["top1_score"],
         "topIssues": disease["topMatches"],
         "project": project,
@@ -410,13 +458,14 @@ async def _diagnose_core(
         "mode": mode,
         "caseType": case_type,
         "imageCount": len(images),
+        "notes": notes,
     }
     return {"plant": plant, "diseaseOrPest": disease, "summary": summary}
 
 
-# ----------------------------
-# OpenAI file ref endpoint
-# ----------------------------
+# =========================================================
+# OpenAI file refs endpoint (Actions-hez)
+# =========================================================
 @app.post("/diagnose_files")
 async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     refs = payload.get("openaiFileIdRefs") or []
@@ -429,9 +478,9 @@ async def diagnose_files(payload: Dict[str, Any] = Body(...)):
     organs_raw = payload.get("organs", None)
     organs = None
     if isinstance(organs_raw, str):
-        organs = organs_raw.strip().lower()
-        if not organs or organs in ("auto", "none", "null"):
-            organs = None
+        o = organs_raw.strip().lower()
+        if o and o not in ("auto", "none", "null"):
+            organs = o
 
     mode = (payload.get("mode") or "learning").strip().lower()
     if mode not in ("learning", "expert"):
