@@ -13,7 +13,16 @@ from fastapi.middleware.cors import CORSMiddleware
 # =========================================================
 # CONFIG
 # =========================================================
-APP_VERSION = os.getenv("APP_VERSION", "1.2.5").strip()
+import time
+import pathlib
+import uuid
+
+APP_VERSION = "1.2.5"  # fix, ne env-ből
+BUILD_ID = os.getenv("RENDER_GIT_COMMIT", "") or str(uuid.uuid4())
+BUILD_TIME = int(time.time())
+MAIN_FILE = str(pathlib.Path(__file__).resolve())
+
+print(f"[BOOT] version={APP_VERSION} build_id={BUILD_ID} file={MAIN_FILE}")
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
 PLANTNET_PROJECT = os.getenv("PLANTNET_PROJECT", "k-middle-europe").strip()  # közép-európa default
@@ -308,8 +317,14 @@ async def health() -> Dict[str, Any]:
 
 @app.get("/version")
 async def version() -> Dict[str, Any]:
-    return {"version": APP_VERSION, "python": platform.python_version(), "httpx": httpx.__version__}
-
+    return {
+        "version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_time": BUILD_TIME,
+        "main_file": MAIN_FILE,
+        "python": platform.python_version(),
+        "httpx": httpx.__version__,
+    }
 
 # =========================================================
 # Swagger/Browser file upload endpoints
