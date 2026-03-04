@@ -10,7 +10,7 @@ from PIL import Image
 app = FastAPI(title="Plant Diagnosis API", version="1.1.0")
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
-PLANTNET_URL = "https://my-api.plantnet.org/v2/identify/all"  # PlantNet endpoint
+PLANTNET_URL = "https://my-api.plantnet.org/v2/identify/k-middle-europe"  # PlantNet endpoint
 
 @app.get("/")
 def root():
@@ -59,8 +59,7 @@ async def diagnose(
 
     # PlantNet hívás
     params = {
-        "api-key": PLANTNET_API_KEY,
-        "project": project,  # k-middle-europe
+        "api-key": PLANTNET_API_KEY
     }
     if organs:
         # PlantNet több organs paramot is elfogad, egyszerűen továbbadjuk
