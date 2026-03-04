@@ -1,4 +1,6 @@
 fastapi
 uvicorn[standard]
 python-multipart
-Pillow
+pillow
+httpx
+python-dotenv
