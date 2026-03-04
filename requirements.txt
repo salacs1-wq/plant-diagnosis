@@ -4,3 +4,4 @@ httpx
 python-multipart
 anyio
 Pillow
+request
