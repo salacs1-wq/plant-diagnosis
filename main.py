@@ -1,333 +1,271 @@
 import os
 import json
-from typing import Any, Dict, List, Optional, Tuple, Literal
+from typing import Any, Dict, List, Optional, Tuple
 
-import anyio
 import httpx
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Body, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
-# ============================================================
-# CONFIG
-# ============================================================
 
+# =========================
+# Config
+# =========================
+APP_VERSION = os.getenv("APP_VERSION", "1.3.0")
+
+# Your internal API key (optional gate). If empty => no auth check.
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "").strip()
+
+# PlantNet
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
 PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").rstrip("/")
+PLANTNET_DEFAULT_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope")  # weurope / all / k-middle-europe etc.
 
-DEFAULT_PROJECT = os.getenv("PLANTNET_DEFAULT_PROJECT", "k-middle-europe")  # <-- fontos
-DEFAULT_MODE: Literal["learning", "expert"] = "learning"
-DEFAULT_CASETYPE: Literal["weed", "disease", "pest"] = "weed"
+# HTTP
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "30"))
+MAX_IMAGES = int(os.getenv("MAX_IMAGES", "5"))  # we keep Top5 anyway, but can download multiple images
+MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))  # 10 MB per image
 
-TOP_K = 5  # <-- mindig top5-öt adunk vissza
+
+# =========================
+# App
+# =========================
+app = FastAPI(
+    title="Plant Diagnosis API",
+    version=APP_VERSION,
+    description="PlantNet-based identification with OpenAI file-ref download support.",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-def _require_api_key() -> None:
+@app.on_event("startup")
+async def _startup():
+    app.state.http = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    client: httpx.AsyncClient = app.state.http
+    await client.aclose()
+
+
+def _require_internal_key(x_api_key: Optional[str]):
+    if INTERNAL_API_KEY:
+        if not x_api_key or x_api_key.strip() != INTERNAL_API_KEY:
+            raise HTTPException(status_code=401, detail="Missing/invalid X-API-Key.")
+
+
+def _require_plantnet_key():
     if not PLANTNET_API_KEY:
-        raise HTTPException(status_code=500, detail="Hiányzik: PLANTNET_API_KEY")
+        raise HTTPException(status_code=500, detail="Missing PLANTNET_API_KEY on server.")
 
 
-def _httpx_timeout() -> httpx.Timeout:
-    return httpx.Timeout(connect=20.0, read=60.0, write=60.0, pool=20.0)
-
-
-def _safe_json(r: httpx.Response) -> Any:
+def _safe_json(resp: httpx.Response) -> Any:
     try:
-        return r.json()
+        return resp.json()
     except Exception:
-        return {"text": r.text[:800]}
+        return {"text": resp.text[:2000]}
 
 
-# ============================================================
-# MODELS (request)
-# ============================================================
-
-class OpenAIFileRef(BaseModel):
-    name: Optional[str] = None
-    id: str
-    mime_type: Optional[str] = None
-    download_link: str
-
-
-class DiagnoseFilesRequest(BaseModel):
-    openaiFileIdRefs: List[OpenAIFileRef] = Field(..., min_length=1, max_length=5)
-
-    # FONTOS: organs alapból ne legyen küldve.
-    # Ha a GPT mégis küldi, akkor is OPTIONAL.
-    organs: Optional[str] = Field(default=None, description="Opcionális. Ha üres, nem küldjük PlantNet felé.")
-    project: Optional[str] = Field(default=None, description="Pl. k-middle-europe | all")
-    mode: Optional[Literal["learning", "expert"]] = Field(default=None)
-    caseType: Optional[Literal["weed", "disease", "pest"]] = Field(default=None)
+def _normalize_organs(organs: Optional[str]) -> List[str]:
+    """
+    PlantNet expects multiple organs as repeated query param: organs=leaf&organs=flower
+    Input can be:
+      - None => default leaf
+      - "leaf"
+      - "leaf,flower"
+    """
+    if not organs:
+        return ["leaf"]
+    raw = str(organs).strip()
+    if not raw:
+        return ["leaf"]
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return parts or ["leaf"]
 
 
-# ============================================================
-# HELPERS
-# ============================================================
-
-def _normalize_project(project: Optional[str]) -> str:
-    # Webes fiókban nálad: k-middle-europe
-    if not project:
-        return DEFAULT_PROJECT
-    return project
+def _plantnet_params(organs_list: List[str]) -> List[Tuple[str, str]]:
+    params: List[Tuple[str, str]] = [("api-key", PLANTNET_API_KEY)]
+    for o in organs_list:
+        params.append(("organs", o))
+    return params
 
 
-def _normalize_mode(mode: Optional[str]) -> Literal["learning", "expert"]:
-    if mode in ("learning", "expert"):
-        return mode  # type: ignore
-    return DEFAULT_MODE
-
-
-def _normalize_case_type(case_type: Optional[str]) -> Literal["weed", "disease", "pest"]:
-    if case_type in ("weed", "disease", "pest"):
-        return case_type  # type: ignore
-    return DEFAULT_CASETYPE
-
-
-async def _download_bytes(url: str) -> bytes:
-    if not url or not isinstance(url, str):
-        raise HTTPException(status_code=422, detail="Hiányzik: download_link")
-
-    def _sync_get(u: str) -> httpx.Response:
-        with httpx.Client(timeout=_httpx_timeout(), follow_redirects=True) as c:
-            return c.get(u)
-
-    r = await anyio.to_thread.run_sync(_sync_get, url)
-
+async def _download_image(url: str) -> Tuple[bytes, str]:
+    """
+    Download an image from a signed URL (OpenAI file download_link).
+    Returns (bytes, mime_type).
+    """
+    client: httpx.AsyncClient = app.state.http
+    r = await client.get(url, follow_redirects=True)
     if r.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail={"stage": "download", "status": r.status_code, "text": r.text[:500]},
+        raise HTTPException(status_code=502, detail={"download_status": r.status_code, "download_error": _safe_json(r)})
+    content = r.content
+    if not content or len(content) < 50:
+        raise HTTPException(status_code=422, detail="Downloaded image is empty/too small.")
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail=f"Image too large (> {MAX_IMAGE_BYTES} bytes).")
+    mime = r.headers.get("content-type", "image/jpeg").split(";")[0].strip() or "image/jpeg"
+    return content, mime
+
+
+def _compact_species_response(plantnet_json: Dict[str, Any], top_n: int = 5) -> Dict[str, Any]:
+    """
+    PlantNet response -> compact list.
+    We keep PlantNet score as the single source of truth for score (goal: PlantNet score == GPT score).
+    """
+    results = plantnet_json.get("results") or []
+    compact: List[Dict[str, Any]] = []
+
+    for item in results[:top_n]:
+        species = item.get("species") or {}
+        score = float(item.get("score") or 0.0)
+
+        sci = species.get("scientificNameWithoutAuthor") or species.get("scientificName") or ""
+        family = (species.get("family") or {}).get("scientificNameWithoutAuthor") or ""
+        common_names = species.get("commonNames") or []
+        gbif = species.get("gbif") or {}
+        gbif_id = gbif.get("id")
+
+        compact.append(
+            {
+                "scientificName": sci,
+                "family": family,
+                "commonNames": common_names,
+                "score": score,                     # 0..1
+                "scorePct": round(score * 100, 1),  # %
+                "gbifId": gbif_id,
+            }
         )
 
-    data = r.content
-    if not data or len(data) < 50:
-        raise HTTPException(status_code=422, detail="A letöltött kép üres vagy túl kicsi.")
-    return data
-
-
-def _topk_results_from_plantnet_identify(raw: Dict[str, Any], k: int) -> List[Dict[str, Any]]:
-    # PlantNet identify tipikusan: raw["results"] listában adja
-    results = raw.get("results") or []
-    out = []
-    for item in results[:k]:
-        sp = item.get("species") or {}
-        sci = sp.get("scientificNameWithoutAuthor") or sp.get("scientificName") or "Unknown"
-        score = item.get("score", 0.0) or 0.0
-        out.append({"name": sci, "score": float(score)})
-    return out
-
-
-def _best_match_from_top(top: List[Dict[str, Any]]) -> str:
-    return top[0]["name"] if top else ""
-
-
-def _best_score_from_top(top: List[Dict[str, Any]]) -> float:
-    return float(top[0]["score"]) if top else 0.0
-
-
-# ============================================================
-# PLANTNET CALLS (sync in thread)
-# ============================================================
-
-def _sync_post(url: str, params: Dict[str, Any], data, files) -> httpx.Response:
-    with httpx.Client(timeout=_httpx_timeout(), follow_redirects=True) as c:
-        return c.post(url, params=params, data=data, files=files)
+    return {
+        "plantnetProject": plantnet_json.get("query", {}).get("project") or None,
+        "results": compact,
+        "raw": None,  # keep None to avoid huge payload; switch to plantnet_json if you want debugging
+    }
 
 
 async def _plantnet_identify(
     images: List[Tuple[str, bytes, str]],
-    *,
     project: str,
     organs: Optional[str],
 ) -> Dict[str, Any]:
     """
-    PlantNet: /v2/identify/{project}
-    - api-key query param
-    - images = multipart
-    - organs = multipart field (NEM query param)
+    Async call to PlantNet identify endpoint with multiple images.
     """
-    _require_api_key()
-    if not images:
-        raise HTTPException(status_code=422, detail="Nincs kép az azonosításhoz.")
+    _require_plantnet_key()
 
+    organs_list = _normalize_organs(organs)
     url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
-    files = [("images", (fn or "image.jpg", b, mt or "image/jpeg")) for (fn, b, mt) in images]
+    params = _plantnet_params(organs_list)
 
-    # FONTOS: organs-t csak akkor küldünk, ha tényleg megadták
-    data = None
-    if organs:
-        # PlantNet több képnél listát várhat; itt egyszerűen ugyanazt adjuk minden képre
-        data = [("organs", organs) for _ in images]
+    # httpx supports list of ("images", (filename, bytes, mime))
+    files = []
+    for (fname, bts, mime) in images:
+        files.append(("images", (fname or "image.jpg", bts, mime or "image/jpeg")))
 
-    params = {"api-key": PLANTNET_API_KEY}
-
-    r = await anyio.to_thread.run_sync(_sync_post, url, params, data, files)
+    client: httpx.AsyncClient = app.state.http
+    r = await client.post(url, params=params, files=files)
 
     if r.status_code >= 400:
         raise HTTPException(
             status_code=502,
             detail={
-                "plantnet_stage": "identify",
                 "plantnet_status": r.status_code,
                 "plantnet_error": _safe_json(r),
+                "plantnet_url": url,
+                "project": project,
+                "organs": organs_list,
             },
         )
+
     return r.json()
 
 
-async def _plantnet_diseases_identify(images: List[Tuple[str, bytes, str]]) -> Dict[str, Any]:
-    """
-    PlantNet diseases: /v2/diseases/identify
-    - api-key query param
-    - images multipart
-    """
-    _require_api_key()
-    if not images:
-        raise HTTPException(status_code=422, detail="Nincs kép az azonosításhoz.")
-
-    url = f"{PLANTNET_BASE_URL}/v2/diseases/identify"
-    params = {"api-key": PLANTNET_API_KEY}
-    files = [("images", (fn or "image.jpg", b, mt or "image/jpeg")) for (fn, b, mt) in images]
-
-    r = await anyio.to_thread.run_sync(_sync_post, url, params, None, files)
-
-    if r.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "plantnet_stage": "diseases",
-                "plantnet_status": r.status_code,
-                "plantnet_error": _safe_json(r),
-            },
-        )
-    return r.json()
-
-
-def _topk_from_diseases(raw: Dict[str, Any], k: int) -> List[Dict[str, Any]]:
-    # PlantNet diseases tipikusan: raw["results"] listában adja
-    results = raw.get("results") or []
-    out = []
-    for item in results[:k]:
-        # item: { "disease": {"code": "...", "name": "..."} , "score": ... } – ez változhat
-        dis = item.get("disease") or {}
-        code = dis.get("code") or dis.get("name") or item.get("name") or "Unknown"
-        score = item.get("score", 0.0) or 0.0
-        out.append({"name": str(code), "score": float(score)})
-    return out
-
-
-# ============================================================
-# RESPONSE SHAPE (egységes)
-# ============================================================
-
-def _compact_match(best: str, top: List[Dict[str, Any]], level: str, meta: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "bestMatch": best,
-        "confidence": {"top1_score": _best_score_from_top(top), "level": level},
-        "topMatches": top,
-        "meta": meta,
-    }
-
-
-def _summary(
-    *,
-    plant_top: List[Dict[str, Any]],
-    issue_top: List[Dict[str, Any]],
-    project: str,
-    organs_sent: Optional[str],
-    mode: str,
-    case_type: str,
-    image_count: int,
-) -> Dict[str, Any]:
-    return {
-        "bestPlant": _best_match_from_top(plant_top),
-        "plantScore": _best_score_from_top(plant_top),
-        "topPlants": plant_top,
-        "bestIssue": _best_match_from_top(issue_top),
-        "issueScore": _best_score_from_top(issue_top),
-        "topIssues": issue_top,
-        "project": project,
-        "organsSent": organs_sent,
-        "mode": mode,
-        "caseType": case_type,
-        "imageCount": image_count,
-    }
-
-
-# ============================================================
-# APP
-# ============================================================
-
-app = FastAPI(title="Plant Diagnosis Bridge", version="1.0.0")
-
-
-@app.get("/")
-async def root() -> Dict[str, Any]:
-    return {"status": "ok"}
-
-
+# =========================
+# Endpoints
+# =========================
 @app.get("/health")
-async def health() -> Dict[str, Any]:
-    return {"status": "ok"}
+async def health():
+    return {"status": "ok", "version": APP_VERSION}
 
 
 @app.get("/version")
-async def version() -> Dict[str, Any]:
-    return {"app": "plant-diagnosis-bridge", "version": "1.0.0"}
+async def version():
+    return {"appVersion": APP_VERSION}
 
 
 @app.post("/diagnose_files")
-async def diagnose_files(req: DiagnoseFilesRequest) -> Dict[str, Any]:
-    project = _normalize_project(req.project)
-    mode = _normalize_mode(req.mode)
-    case_type = _normalize_case_type(req.caseType)
+async def diagnose_files(
+    payload: Dict[str, Any] = Body(
+        ...,
+        example={
+            "openaiFileIdRefs": [
+                {
+                    "name": "field_image.jpg",
+                    "id": "file_...",
+                    "mime_type": "image/jpeg",
+                    "download_link": "https://....",
+                }
+            ],
+            "organs": "leaf",
+            "project": "weurope",
+            "mode": "expert",
+            "caseType": "weed",
+        },
+    ),
+    x_api_key: Optional[str] = None,
+):
+    """
+    Main endpoint used by GPT Actions.
+    Expects OpenAI file refs with signed download_link.
+    """
+    _require_internal_key(x_api_key)
 
-    # images letöltése
+    openai_refs = payload.get("openaiFileIdRefs") or []
+    if not isinstance(openai_refs, list) or len(openai_refs) == 0:
+        raise HTTPException(
+            status_code=422,
+            detail="openaiFileIdRefs is missing/empty. Attach at least 1 image in the chat message.",
+        )
+
+    project = (payload.get("project") or PLANTNET_DEFAULT_PROJECT) or PLANTNET_DEFAULT_PROJECT
+    organs = payload.get("organs")  # can be null
+    mode = (payload.get("mode") or "expert").strip()
+    case_type = (payload.get("caseType") or "weed").strip()
+
+    # Download images (limit)
     images: List[Tuple[str, bytes, str]] = []
-    for ref in req.openaiFileIdRefs:
-        b = await _download_bytes(ref.download_link)
-        images.append((ref.name or "image.jpg", b, ref.mime_type or "image/jpeg"))
+    for ref in openai_refs[:MAX_IMAGES]:
+        if not isinstance(ref, dict):
+            continue
+        dl = (ref.get("download_link") or "").strip()
+        if not dl:
+            continue
+        name = (ref.get("name") or "image.jpg").strip()
+        content, mime = await _download_image(dl)
+        images.append((name, content, mime))
 
-    # 1) Növény (weeds) – mindig lefuttatjuk, mert a kárkép/kártevő módban is kell tudni, MI A KULTÚRA / MI A NÖVÉNY.
-    #    De a visszaadott "domináns" listát a caseType alapján szűrjük.
-    plant_raw = await _plantnet_identify(images, project=project, organs=req.organs)
-    plant_top = _topk_results_from_plantnet_identify(plant_raw, TOP_K)
+    if not images:
+        raise HTTPException(status_code=422, detail="No valid download_link found in openaiFileIdRefs.")
 
-    # 2) Betegség/kártevő – PlantNet diseases endpoint (ha kell)
-    issue_top: List[Dict[str, Any]] = []
-    issue_raw: Optional[Dict[str, Any]] = None
-    if case_type in ("disease", "pest"):
-        issue_raw = await _plantnet_diseases_identify(images)
-        issue_top = _topk_from_diseases(issue_raw, TOP_K)
+    # PlantNet identify
+    plantnet_raw = await _plantnet_identify(images=images, project=project, organs=organs)
 
-    plant = _compact_match(
-        best=_best_match_from_top(plant_top),
-        top=plant_top,
-        level="species",
-        meta={"project": project, "language": "en", "organs_sent": req.organs},
-    )
+    # Compact results (Top5) – score source of truth
+    compact = _compact_species_response(plantnet_raw, top_n=5)
 
-    disease_or_pest = _compact_match(
-        best=_best_match_from_top(issue_top),
-        top=issue_top,
-        level=("disease_or_pest" if case_type in ("disease", "pest") else "none"),
-        meta={"project": project},
-    )
-
-    summary = _summary(
-        plant_top=plant_top,
-        issue_top=issue_top,
-        project=project,
-        organs_sent=req.organs,
-        mode=mode,
-        case_type=case_type,
-        image_count=len(images),
-    )
-
-    # SZŰRÉS: ha weed mód, ne „tolja előre” a diseases listát a GPT felé
-    if case_type == "weed":
-        disease_or_pest = _compact_match(best="", top=[], level="none", meta={"project": project})
-        summary["bestIssue"] = ""
-        summary["issueScore"] = 0.0
-        summary["topIssues"] = []
-
-    return {"plant": plant, "diseaseOrPest": disease_or_pest, "summary": summary}
+    return {
+        "project": project,
+        "organs": organs,
+        "mode": mode,
+        "caseType": case_type,
+        "topN": 5,
+        "plantnet": compact,
+    }
