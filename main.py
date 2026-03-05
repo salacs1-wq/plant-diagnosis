@@ -22,7 +22,68 @@ APP_NAME = "plant-diagnosis"
 APP_VERSION = "1.1.0"
 
 app = FastAPI(title="Plant Diagnosis API", version=APP_VERSION)
+import base64
+from fastapi import Body, HTTPException
+from pydantic import BaseModel
+from typing import Optional, Literal
 
+class DiagnoseJSONIn(BaseModel):
+    image_b64: str
+    mode: Optional[Literal["weed", "disease", "pest", "crop", "auto"]] = "weed"
+    crop: Optional[str] = None
+    note: Optional[str] = None
+    debug: Optional[bool] = False
+
+@app.post("/v1/diagnosztika_json", tags=["diagnosis"])
+@app.post("/v1/diagnose_json", tags=["diagnosis"])
+async def diagnose_json(payload: DiagnoseJSONIn = Body(...)):
+    image_b64 = payload.image_b64
+
+    # data URL elfogadása (data:image/jpeg;base64,...)
+    if "base64," in image_b64:
+        image_b64 = image_b64.split("base64,", 1)[1]
+
+    try:
+        image_bytes = base64.b64decode(image_b64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 in image_b64")
+
+    # ---- IDE A SAJÁT MEGLÉVŐ LOGIKÁD HÍVÁSAI ----
+    # pl.:
+    # raw = call_plantnet(image_bytes, project="k-middle-europe", top_k=10)
+    # plantnet = simplify_plantnet_response(raw, top_k=10)
+    # weed_pack = filter_to_field_weeds(plantnet["candidates"], crop=payload.crop)
+    # top = weed_pack["top"] or {}
+
+    # Placeholder: cseréld a saját függvényeidre
+    raw = call_plantnet(image_bytes)  # <-- NÁLAD EZ MÁR MEGVAN
+    plantnet = simplify_plantnet_response(raw, top_k=10)  # <-- NÁLAD EZ MÁR MEGVAN
+    weed_pack = filter_to_field_weeds(plantnet["candidates"], crop=payload.crop)  # <-- NÁLAD EZ MÁR MEGVAN
+    top = weed_pack.get("top") or {}
+
+    gpt_friendly = {
+        "top_species": top.get("scientific_name"),
+        "top_hu_name": top.get("hu_name"),
+        "confidence": top.get("confidence"),
+        "confidence_level": weed_pack.get("confidence_level", "low"),
+        "filtered_candidates": (weed_pack.get("kept") or [])[:5],
+        "note": "PlantNet jelöltek szántóföldi gyom adatbázissal szűrve (crop-aware).",
+    }
+
+    if payload.debug:
+        gpt_friendly["dropped_preview"] = (weed_pack.get("dropped") or [])[:10]
+
+    return {
+        "ok": True,
+        "request": {
+            "mode": payload.mode,
+            "crop": payload.crop,
+            "note": payload.note,
+            "input": "json_base64",
+        },
+        "plantnet": plantnet,
+        "gpt_friendly": gpt_friendly,
+    }
 # -------------------------
 # CORS
 # -------------------------
