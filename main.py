@@ -1,61 +1,19 @@
 from __future__ import annotations
 
-import os
 import io
+import os
 import time
-from typing import Any, Dict, Optional, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 import requests
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
-import requests
-
-def run_inference(mode: Mode, image_bytes: bytes) -> Dict[str, Any]:
-    api_key = os.getenv("PLANTNET_API_KEY", "").strip()
-    base_url = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").strip().rstrip("/")
-    project = os.getenv("PLANTNET_PROJECT", "k-middle-europe").strip()
-
-    if not api_key:
-        return {
-            "mode": mode,
-            "engine": "plantnet",
-            "error": "PLANTNET_API_KEY nincs beállítva",
-            "candidates": [],
-        }
-
-  url = f"{base_url}/v2/identify/{project}?api-key={api_key}"
-
-  files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
-
-  r = requests.post(url, files=files, timeout=60)
-    if r.status_code >= 400:
-        return {
-            "mode": mode,
-            "engine": "plantnet",
-            "error": f"HTTP {r.status_code}: {r.text[:300]}",
-            "candidates": [],
-        }
-
-    raw = r.json()
-    results = raw.get("results", []) or []
-
-    cands = []
-    for item in results[:5]:
-        species = item.get("species", {}) or {}
-        cands.append({
-            "label": species.get("scientificNameWithoutAuthor") or species.get("scientificName") or "unknown",
-            "confidence": item.get("score", None),
-            "common_names": (species.get("commonNames") or [])[:5],
-        })
-
-    return {"mode": mode, "engine": "plantnet", "candidates": cands}
 
 try:
     from PIL import Image
 except Exception:
-    Image = None  # pillow optional, de ajánlott
+    Image = None  # pillow optional
 
 
 Mode = Literal["weed", "disease", "pest", "crop", "auto"]
@@ -65,7 +23,7 @@ APP_VERSION = "1.0.0"
 
 app = FastAPI(title="Plant Diagnosis API", version=APP_VERSION)
 
-# CORS (GPT / web kliens miatt)
+# CORS
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -76,7 +34,7 @@ app.add_middleware(
 )
 
 
-@app.get("/")
+@app.get("/", tags=["meta"])
 def root() -> Dict[str, Any]:
     return {
         "name": APP_NAME,
@@ -86,7 +44,7 @@ def root() -> Dict[str, Any]:
     }
 
 
-@app.get("/health")
+@app.get("/health", tags=["meta"])
 def health() -> Dict[str, Any]:
     return {"status": "ok", "ts": int(time.time())}
 
@@ -120,26 +78,19 @@ def call_plantnet(image_bytes: bytes) -> Dict[str, Any]:
     if not api_key:
         raise HTTPException(status_code=500, detail="PLANTNET_API_KEY nincs beállítva a Render env-ben.")
 
-    # PlantNet Identify endpoint
-    url = f"{base_url}/v2/identify/{project}"
+    # API kulcs query paraméterben!
+    url = f"{base_url}/v2/identify/{project}?api-key={api_key}"
 
     files = {
-        # a PlantNet több képet is tud fogadni, mi most egyet küldünk
         "images": ("image.jpg", image_bytes, "image/jpeg"),
-    }
-    data = {
-        "api-key": api_key,
-        # opcionális: organs mező, ha akarod: "organs": "leaf"
-        # opcionális: include-related-images stb.
     }
 
     try:
-        r = requests.post(url, files=files, data=data, timeout=60)
+        r = requests.post(url, files=files, timeout=60)
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"PlantNet hívási hiba: {e}")
 
     if r.status_code >= 400:
-        # PlantNet hibaüzenet visszaadása debughoz
         raise HTTPException(status_code=502, detail=f"PlantNet HTTP {r.status_code}: {r.text[:500]}")
 
     try:
@@ -154,22 +105,13 @@ def simplify_plantnet_response(raw: Dict[str, Any], top_k: int = 5) -> Dict[str,
 
     for item in results[:top_k]:
         species = item.get("species", {}) or {}
-        score = item.get("score", None)
-
         sci = species.get("scientificNameWithoutAuthor") or species.get("scientificName") or "unknown"
-        auth = species.get("scientificNameAuthorship")
         common = species.get("commonNames") or []
-        family = (species.get("family") or {}).get("scientificNameWithoutAuthor") if isinstance(species.get("family"), dict) else None
-        genus = (species.get("genus") or {}).get("scientificNameWithoutAuthor") if isinstance(species.get("genus"), dict) else None
-
         simple.append(
             {
                 "scientific_name": sci,
-                "authorship": auth,
+                "confidence": item.get("score", None),
                 "common_names": common[:5],
-                "family": family,
-                "genus": genus,
-                "confidence": score,
             }
         )
 
@@ -181,7 +123,7 @@ def simplify_plantnet_response(raw: Dict[str, Any], top_k: int = 5) -> Dict[str,
     }
 
 
-@app.post("/v1/diagnose")
+@app.post("/v1/diagnose", tags=["diagnosis"])
 async def diagnose(
     mode: Mode = Form("auto"),
     image: UploadFile = File(...),
