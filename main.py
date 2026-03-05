@@ -1,69 +1,55 @@
-# main.py
 from __future__ import annotations
 
 import os
 import io
 import time
-from typing import Optional, List, Literal, Dict, Any
+from typing import Any, Dict, Optional, List, Literal
 
+import requests
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 try:
-    from PIL import Image  # pillow
-except Exception:  # pragma: no cover
-    Image = None  # type: ignore
+    from PIL import Image
+except Exception:
+    Image = None  # pillow optional, de ajánlott
 
+
+Mode = Literal["weed", "disease", "pest", "crop", "auto"]
 
 APP_NAME = "plant-diagnosis"
 APP_VERSION = "1.0.0"
 
-Mode = Literal["weed", "disease", "pest", "crop", "auto"]
+app = FastAPI(title="Plant Diagnosis API", version=APP_VERSION)
 
-app = FastAPI(
-    title="Plant Diagnosis API",
-    version=APP_VERSION,
-    description="Határszemle / növényorvosi asszisztens – diagnosztikai API (Render kompatibilis).",
-)
-
-# CORS – ha a GPT / web kliens más doménről hívja
+# CORS (GPT / web kliens miatt)
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ha akarod, szűkíthető
+    allow_origins=[o.strip() for o in allowed_origins] if allowed_origins else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-@app.get("/", tags=["meta"])
+@app.get("/")
 def root() -> Dict[str, Any]:
     return {
         "name": APP_NAME,
         "version": APP_VERSION,
         "status": "ok",
-        "endpoints": ["/health", "/v1/diagnose", "/openapi.json", "/docs"],
+        "endpoints": ["/health", "/v1/diagnose", "/docs", "/openapi.json"],
     }
 
 
-@app.get("/health", tags=["meta"])
+@app.get("/health")
 def health() -> Dict[str, Any]:
-    # Render healthcheck-hez tökéletes
     return {"status": "ok", "ts": int(time.time())}
 
 
-def _read_image_bytes(file: UploadFile) -> bytes:
-    if not file:
-        raise HTTPException(status_code=400, detail="Hiányzik a fájl (image).")
-    return file.file.read()
-
-
-def _basic_image_info(image_bytes: bytes) -> Dict[str, Any]:
-    """
-    Csak meta infó: segít debugolni (felbontás, formátum).
-    Nem kötelező a működéshez.
-    """
+def _image_debug_info(image_bytes: bytes) -> Dict[str, Any]:
     info: Dict[str, Any] = {"bytes": len(image_bytes)}
     if Image is None:
         info["pil"] = "not_installed"
@@ -84,57 +70,91 @@ def _basic_image_info(image_bytes: bytes) -> Dict[str, Any]:
     return info
 
 
-def run_inference(mode: Mode, image_bytes: bytes) -> Dict[str, Any]:
-    """
-    Itt kell majd a TE diagnosztikád (modell / külső API / OpenAI Vision stb.).
-    Most szándékosan úgy van megírva, hogy kulcs nélkül is fusson (ne dőljön el a deploy).
-    """
-    # Példa: környezeti változóval vezérelhető "kulcs" (ha később kell)
-    api_key = os.getenv("DIAG_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+def call_plantnet(image_bytes: bytes) -> Dict[str, Any]:
+    api_key = os.getenv("PLANTNET_API_KEY", "").strip()
+    base_url = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").strip().rstrip("/")
+    project = os.getenv("PLANTNET_PROJECT", "k-middle-europe").strip()
 
-    # Ha nincs semmi bekötve, adjunk vissza egy stabil, tesztelhető választ:
-    base = {
-        "mode": mode,
-        "engine": "stub",
-        "has_api_key": bool(api_key),
-        "candidates": [
-            {
-                "label": "unknown",
-                "confidence": 0.01,
-                "notes": "Nincs bekötve modell/API. Cseréld a run_inference() függvényt a saját logikádra.",
-            }
-        ],
+    if not api_key:
+        raise HTTPException(status_code=500, detail="PLANTNET_API_KEY nincs beállítva a Render env-ben.")
+
+    # PlantNet Identify endpoint
+    url = f"{base_url}/v2/identify/{project}"
+
+    files = {
+        # a PlantNet több képet is tud fogadni, mi most egyet küldünk
+        "images": ("image.jpg", image_bytes, "image/jpeg"),
+    }
+    data = {
+        "api-key": api_key,
+        # opcionális: organs mező, ha akarod: "organs": "leaf"
+        # opcionális: include-related-images stb.
     }
 
-    # Ide jöhet később a valódi inference
-    # pl. return your_model.predict(...)
-    return base
+    try:
+        r = requests.post(url, files=files, data=data, timeout=60)
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"PlantNet hívási hiba: {e}")
+
+    if r.status_code >= 400:
+        # PlantNet hibaüzenet visszaadása debughoz
+        raise HTTPException(status_code=502, detail=f"PlantNet HTTP {r.status_code}: {r.text[:500]}")
+
+    try:
+        return r.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="PlantNet válasz nem JSON.")
 
 
-@app.post("/v1/diagnose", tags=["diagnosis"])
+def simplify_plantnet_response(raw: Dict[str, Any], top_k: int = 5) -> Dict[str, Any]:
+    results = raw.get("results", []) or []
+    simple: List[Dict[str, Any]] = []
+
+    for item in results[:top_k]:
+        species = item.get("species", {}) or {}
+        score = item.get("score", None)
+
+        sci = species.get("scientificNameWithoutAuthor") or species.get("scientificName") or "unknown"
+        auth = species.get("scientificNameAuthorship")
+        common = species.get("commonNames") or []
+        family = (species.get("family") or {}).get("scientificNameWithoutAuthor") if isinstance(species.get("family"), dict) else None
+        genus = (species.get("genus") or {}).get("scientificNameWithoutAuthor") if isinstance(species.get("genus"), dict) else None
+
+        simple.append(
+            {
+                "scientific_name": sci,
+                "authorship": auth,
+                "common_names": common[:5],
+                "family": family,
+                "genus": genus,
+                "confidence": score,
+            }
+        )
+
+    return {
+        "engine": "plantnet",
+        "project": raw.get("project") or os.getenv("PLANTNET_PROJECT", "k-middle-europe"),
+        "top_k": top_k,
+        "candidates": simple,
+    }
+
+
+@app.post("/v1/diagnose")
 async def diagnose(
     mode: Mode = Form("auto"),
     image: UploadFile = File(...),
-    client_id: Optional[str] = Form(None),
     note: Optional[str] = Form(None),
     debug: bool = Form(False),
 ) -> JSONResponse:
-    """
-    Multipart/form-data:
-      - mode: weed | disease | pest | crop | auto
-      - image: feltöltött kép
-      - client_id: opcionális
-      - note: opcionális
-      - debug: true/false (ha true, képinformációkat is visszaad)
-    """
     if mode not in ("weed", "disease", "pest", "crop", "auto"):
         raise HTTPException(status_code=400, detail="Érvénytelen mode.")
 
-    image_bytes = _read_image_bytes(image)
-    if len(image_bytes) < 50:
-        raise HTTPException(status_code=400, detail="Túl kicsi / üres kép.")
+    image_bytes = await image.read()
+    if not image_bytes or len(image_bytes) < 50:
+        raise HTTPException(status_code=400, detail="Üres / túl kicsi kép.")
 
-    result = run_inference(mode, image_bytes)
+    raw = call_plantnet(image_bytes)
+    result = simplify_plantnet_response(raw, top_k=5)
 
     payload: Dict[str, Any] = {
         "ok": True,
@@ -142,17 +162,12 @@ async def diagnose(
             "mode": mode,
             "filename": image.filename,
             "content_type": image.content_type,
-            "client_id": client_id,
             "note": note,
         },
         "result": result,
     }
 
     if debug:
-        payload["debug"] = _basic_image_info(image_bytes)
+        payload["debug"] = _image_debug_info(image_bytes)
 
     return JSONResponse(payload)
-
-
-# Render/uvicorn belépési pont:
-# Start command (Render):  uvicorn main:app --host 0.0.0.0 --port $PORT
