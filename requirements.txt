@@ -1,6 +1,5 @@
-fastapi
-uvicorn[standard]
-python-multipart
-pillow
-httpx
-python-dotenv
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+requests==2.32.3
+pillow==10.4.0
