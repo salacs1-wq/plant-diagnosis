@@ -6,9 +6,46 @@ import time
 from typing import Any, Dict, Optional, List, Literal
 
 import requests
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+
+def run_inference(mode: Mode, image_bytes: bytes) -> Dict[str, Any]:
+    api_key = os.getenv("PLANTNET_API_KEY", "").strip()
+    base_url = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").strip().rstrip("/")
+    project = os.getenv("PLANTNET_PROJECT", "k-middle-europe").strip()
+
+    if not api_key:
+        return {
+            "mode": mode,
+            "engine": "plantnet",
+            "error": "PLANTNET_API_KEY nincs beállítva",
+            "candidates": [],
+        }
+
+    url = f"{base_url}/v2/identify/{project}"
+    files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
+    data = {"api-key": api_key}
+
+    r = requests.post(url, files=files, data=data, timeout=60)
+    if r.status_code >= 400:
+        return {
+            "mode": mode,
+            "engine": "plantnet",
+            "error": f"HTTP {r.status_code}: {r.text[:300]}",
+            "candidates": [],
+        }
+
+    raw = r.json()
+    results = raw.get("results", []) or []
+
+    cands = []
+    for item in results[:5]:
+        species = item.get("species", {}) or {}
+        cands.append({
+            "label": species.get("scientificNameWithoutAuthor") or species.get("scientificName") or "unknown",
+            "confidence": item.get("score", None),
+            "common_names": (species.get("commonNames") or [])[:5],
+        })
+
+    return {"mode": mode, "engine": "plantnet", "candidates": cands}
 
 try:
     from PIL import Image
