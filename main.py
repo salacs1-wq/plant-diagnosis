@@ -1,8 +1,7 @@
 @app.get("/")
 def root():
-    return {"service": "plant-diagnosis", "status": "ok"}
-    https://plant-diagnosis-1.onrender.com
-    
+    return {"service": "plant-diagnosis", "status": "ok"} https://plant-diagnosis-1.onrender.com
+        
 from __future__ import annotations
 
 import os
