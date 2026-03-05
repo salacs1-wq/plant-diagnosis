@@ -231,13 +231,15 @@ def health() -> Dict[str, Any]:
 
 
 @app.post("/v1/diagnose", tags=["diagnosis"])
+@app.post("/v1/diagnosztika", tags=["diagnosis"])
 async def diagnose(
     mode: Mode = Form("auto"),
-    crop: Optional[str] = Form(None),   # wheat|rape|maize|sunflower|soy|beet
+    crop: Optional[str] = Form(None),
     image: UploadFile = File(...),
     note: Optional[str] = Form(None),
     debug: bool = Form(False),
 ) -> JSONResponse:
+    ...
     if mode not in ("weed", "disease", "pest", "crop", "auto"):
         raise HTTPException(status_code=400, detail="Érvénytelen mode.")
 
