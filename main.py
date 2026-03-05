@@ -25,11 +25,11 @@ def run_inference(mode: Mode, image_bytes: bytes) -> Dict[str, Any]:
             "candidates": [],
         }
 
-    url = f"{base_url}/v2/identify/{project}"
-    files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
-    data = {"api-key": api_key}
+  url = f"{base_url}/v2/identify/{project}?api-key={api_key}"
 
-    r = requests.post(url, files=files, data=data, timeout=60)
+  files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
+
+  r = requests.post(url, files=files, timeout=60)
     if r.status_code >= 400:
         return {
             "mode": mode,
