@@ -6,6 +6,11 @@ import time
 from typing import Any, Dict, Optional, List, Literal
 
 import requests
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+import requests
 
 def run_inference(mode: Mode, image_bytes: bytes) -> Dict[str, Any]:
     api_key = os.getenv("PLANTNET_API_KEY", "").strip()
