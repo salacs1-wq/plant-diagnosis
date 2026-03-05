@@ -230,15 +230,56 @@ def health() -> Dict[str, Any]:
     return {"status": "ok", "ts": int(time.time())}
 
 
-@app.post("/v1/diagnose", tags=["diagnosis"])
-@app.post("/v1/diagnosztika", tags=["diagnosis"])
-async def diagnose(
-    mode: Mode = Form("auto"),
-    crop: Optional[str] = Form(None),
-    image: UploadFile = File(...),
-    note: Optional[str] = Form(None),
-    debug: bool = Form(False),
-) -> JSONResponse:
+import base64
+from fastapi import Request
+
+@app.post("/v1/diagnosztika_json", tags=["diagnosis"])
+async def diagnose_json(request: Request):
+    data = await request.json()
+    mode = data.get("mode", "weed")
+    crop = data.get("crop")
+    note = data.get("note")
+    debug = bool(data.get("debug", False))
+    image_b64 = data.get("image_b64")
+
+    if not image_b64 or not isinstance(image_b64, str):
+        raise HTTPException(status_code=400, detail="Hiányzik: image_b64")
+
+    # Elfogadjuk, ha data URL (data:image/jpeg;base64,....)
+    if "base64," in image_b64:
+        image_b64 = image_b64.split("base64,", 1)[1]
+
+    try:
+        image_bytes = base64.b64decode(image_b64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Érvénytelen base64 (image_b64).")
+
+    raw = call_plantnet(image_bytes)
+    plantnet = simplify_plantnet_response(raw, top_k=10)
+    weed_pack = filter_to_field_weeds(plantnet["candidates"], crop=crop)
+    top = weed_pack["top"] or {}
+
+    gpt_friendly = {
+        "top_species": top.get("scientific_name"),
+        "top_hu_name": top.get("hu_name"),
+        "confidence": top.get("confidence"),
+        "confidence_level": weed_pack["confidence_level"],
+        "filtered_candidates": weed_pack["kept"][:5],
+        "note": "PlantNet jelöltek szántóföldi gyom adatbázissal szűrve (crop-aware).",
+    }
+
+    if debug:
+        gpt_friendly["dropped_preview"] = weed_pack["dropped"][:10]
+        gpt_friendly["image_debug"] = _image_debug_info(image_bytes)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "request": {"mode": mode, "crop": crop, "note": note, "input": "json_base64"},
+            "plantnet": plantnet,
+            "gpt_friendly": gpt_friendly,
+        }
+    ):
     ...
     if mode not in ("weed", "disease", "pest", "crop", "auto"):
         raise HTTPException(status_code=400, detail="Érvénytelen mode.")
