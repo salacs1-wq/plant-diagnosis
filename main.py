@@ -3,14 +3,14 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import FastAPI, Body, HTTPException
+from fastapi import FastAPI, Body, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 
 
 # =========================
 # Config
 # =========================
-APP_VERSION = os.getenv("APP_VERSION", "1.3.0")
+APP_VERSION = os.getenv("APP_VERSION", "1.3.1")
 
 # Your internal API key (optional gate). If empty => no auth check.
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "").strip()
@@ -22,7 +22,7 @@ PLANTNET_DEFAULT_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope")  # weurope /
 
 # HTTP
 HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "30"))
-MAX_IMAGES = int(os.getenv("MAX_IMAGES", "5"))  # we keep Top5 anyway, but can download multiple images
+MAX_IMAGES = int(os.getenv("MAX_IMAGES", "5"))
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))  # 10 MB per image
 
 
@@ -32,7 +32,7 @@ MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))  # 10
 app = FastAPI(
     title="Plant Diagnosis API",
     version=APP_VERSION,
-    description="PlantNet-based identification with OpenAI file-ref download support.",
+    description="PlantNet-based identification with OpenAI file-ref download support and manual upload endpoint.",
 )
 
 app.add_middleware(
@@ -77,17 +77,17 @@ def _normalize_organs(organs: Optional[str]) -> List[str]:
     """
     PlantNet expects multiple organs as repeated query param: organs=leaf&organs=flower
     Input can be:
-      - None => default leaf
+      - None => no organs sent
       - "leaf"
       - "leaf,flower"
     """
     if not organs:
-        return ["leaf"]
+        return []
     raw = str(organs).strip()
     if not raw:
-        return ["leaf"]
+        return []
     parts = [p.strip() for p in raw.split(",") if p.strip()]
-    return parts or ["leaf"]
+    return parts
 
 
 def _plantnet_params(organs_list: List[str]) -> List[Tuple[str, str]]:
@@ -118,7 +118,7 @@ async def _download_image(url: str) -> Tuple[bytes, str]:
 def _compact_species_response(plantnet_json: Dict[str, Any], top_n: int = 5) -> Dict[str, Any]:
     """
     PlantNet response -> compact list.
-    We keep PlantNet score as the single source of truth for score (goal: PlantNet score == GPT score).
+    We keep PlantNet score as the single source of truth for score.
     """
     results = plantnet_json.get("results") or []
     compact: List[Dict[str, Any]] = []
@@ -138,8 +138,8 @@ def _compact_species_response(plantnet_json: Dict[str, Any], top_n: int = 5) -> 
                 "scientificName": sci,
                 "family": family,
                 "commonNames": common_names,
-                "score": score,                     # 0..1
-                "scorePct": round(score * 100, 1),  # %
+                "score": score,
+                "scorePct": round(score * 100, 1),
                 "gbifId": gbif_id,
             }
         )
@@ -147,7 +147,7 @@ def _compact_species_response(plantnet_json: Dict[str, Any], top_n: int = 5) -> 
     return {
         "plantnetProject": plantnet_json.get("query", {}).get("project") or None,
         "results": compact,
-        "raw": None,  # keep None to avoid huge payload; switch to plantnet_json if you want debugging
+        "raw": None,
     }
 
 
@@ -165,7 +165,6 @@ async def _plantnet_identify(
     url = f"{PLANTNET_BASE_URL}/v2/identify/{project}"
     params = _plantnet_params(organs_list)
 
-    # httpx supports list of ("images", (filename, bytes, mime))
     files = []
     for (fname, bts, mime) in images:
         files.append(("images", (fname or "image.jpg", bts, mime or "image/jpeg")))
@@ -191,9 +190,23 @@ async def _plantnet_identify(
 # =========================
 # Endpoints
 # =========================
+@app.get("/")
+async def root():
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "endpoints": ["/health", "/version", "/diagnose_files", "/diagnose_upload", "/docs", "/openapi.json"],
+    }
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": APP_VERSION}
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "plantnet_key_set": bool(PLANTNET_API_KEY),
+        "default_project": PLANTNET_DEFAULT_PROJECT,
+    }
 
 
 @app.get("/version")
@@ -214,8 +227,7 @@ async def diagnose_files(
                     "download_link": "https://....",
                 }
             ],
-            "organs": "leaf",
-            "project": "weurope",
+            "project": "k-middle-europe",
             "mode": "expert",
             "caseType": "weed",
         },
@@ -236,11 +248,10 @@ async def diagnose_files(
         )
 
     project = (payload.get("project") or PLANTNET_DEFAULT_PROJECT) or PLANTNET_DEFAULT_PROJECT
-    organs = payload.get("organs")  # can be null
+    organs = payload.get("organs")  # optional
     mode = (payload.get("mode") or "expert").strip()
     case_type = (payload.get("caseType") or "weed").strip()
 
-    # Download images (limit)
     images: List[Tuple[str, bytes, str]] = []
     for ref in openai_refs[:MAX_IMAGES]:
         if not isinstance(ref, dict):
@@ -255,10 +266,7 @@ async def diagnose_files(
     if not images:
         raise HTTPException(status_code=422, detail="No valid download_link found in openaiFileIdRefs.")
 
-    # PlantNet identify
     plantnet_raw = await _plantnet_identify(images=images, project=project, organs=organs)
-
-    # Compact results (Top5) – score source of truth
     compact = _compact_species_response(plantnet_raw, top_n=5)
 
     return {
@@ -266,6 +274,41 @@ async def diagnose_files(
         "organs": organs,
         "mode": mode,
         "caseType": case_type,
+        "topN": 5,
+        "plantnet": compact,
+    }
+
+
+@app.post("/diagnose_upload")
+async def diagnose_upload(
+    image: UploadFile = File(...),
+    project: str = Form(PLANTNET_DEFAULT_PROJECT),
+    mode: str = Form("expert"),
+    caseType: str = Form("weed"),
+):
+    """
+    Manual upload endpoint for Swagger / browser testing.
+    """
+    content = await image.read()
+    if not content or len(content) < 50:
+        raise HTTPException(status_code=422, detail="Uploaded image is empty/too small.")
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail=f"Image too large (> {MAX_IMAGE_BYTES} bytes).")
+
+    mime = image.content_type or "image/jpeg"
+    name = image.filename or "image.jpg"
+
+    plantnet_raw = await _plantnet_identify(
+        images=[(name, content, mime)],
+        project=project,
+        organs=None,  # IMPORTANT: do not send organs
+    )
+    compact = _compact_species_response(plantnet_raw, top_n=5)
+
+    return {
+        "project": project,
+        "mode": mode,
+        "caseType": caseType,
         "topN": 5,
         "plantnet": compact,
     }
