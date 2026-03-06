@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # =========================
 # Config
 # =========================
-APP_VERSION = os.getenv("APP_VERSION", "1.3.1")
+APP_VERSION = os.getenv("APP_VERSION", "1.3.2")
 
 # Your internal API key (optional gate). If empty => no auth check.
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "").strip()
@@ -158,6 +158,7 @@ async def _plantnet_identify(
 ) -> Dict[str, Any]:
     """
     Async call to PlantNet identify endpoint with multiple images.
+    Retry once automatically if the first response is server-side (5xx).
     """
     _require_plantnet_key()
 
@@ -170,21 +171,30 @@ async def _plantnet_identify(
         files.append(("images", (fname or "image.jpg", bts, mime or "image/jpeg")))
 
     client: httpx.AsyncClient = app.state.http
-    r = await client.post(url, params=params, files=files)
+    last_error: Optional[httpx.Response] = None
 
-    if r.status_code >= 400:
+    for attempt in range(2):
+        r = await client.post(url, params=params, files=files)
+        last_error = r
+        if r.status_code < 500:
+            break
+
+    if last_error is None:
+        raise HTTPException(status_code=502, detail="PlantNet request failed before receiving a response.")
+
+    if last_error.status_code >= 400:
         raise HTTPException(
             status_code=502,
             detail={
-                "plantnet_status": r.status_code,
-                "plantnet_error": _safe_json(r),
+                "plantnet_status": last_error.status_code,
+                "plantnet_error": _safe_json(last_error),
                 "plantnet_url": url,
                 "project": project,
                 "organs": organs_list,
             },
         )
 
-    return r.json()
+    return last_error.json()
 
 
 # =========================
