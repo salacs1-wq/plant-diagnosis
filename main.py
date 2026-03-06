@@ -21,7 +21,7 @@ PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org"
 PLANTNET_DEFAULT_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope")  # weurope / all / k-middle-europe etc.
 
 # HTTP
-HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "30"))
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "60"))
 MAX_IMAGES = int(os.getenv("MAX_IMAGES", "5"))
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))  # 10 MB per image
 
