@@ -1,16 +1,13 @@
 import os
 import json
 import base64
-import time
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any, Literal, Tuple
 
 import requests
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
-
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.0.1"
 
 # -----------------------------
 # Environment
@@ -26,25 +23,81 @@ Mode = Literal["weed", "disease", "pest", "auto"]
 # Gyom seed lista (bővíthető)
 # -----------------------------
 FIELD_WEEDS: Dict[str, Dict[str, Any]] = {
-    "Capsella bursa-pastoris": {"hu_name": "pásztortáska", "group": "broadleaf", "crop_tags": ["wheat", "rape", "general"]},
-    "Papaver rhoeas": {"hu_name": "pipacs", "group": "broadleaf", "crop_tags": ["wheat", "general"]},
-    "Veronica persica": {"hu_name": "perzsa veronika", "group": "broadleaf", "crop_tags": ["wheat", "rape", "general"]},
-    "Galium aparine": {"hu_name": "ragadós galaj", "group": "broadleaf", "crop_tags": ["wheat", "rape", "general"]},
-    "Chenopodium album": {"hu_name": "fehér libatop", "group": "broadleaf", "crop_tags": ["maize", "sunflower", "soy", "beet", "general"]},
-    "Conyza canadensis": {"hu_name": "kanadai betyárkóró", "group": "broadleaf", "crop_tags": ["general"]},
-    "Poa annua": {"hu_name": "egynyári perje", "group": "grass", "crop_tags": ["wheat", "general"]},
-    "Apera spica-venti": {"hu_name": "nagy széltippan", "group": "grass", "crop_tags": ["wheat", "general"]},
-    "Alopecurus myosuroides": {"hu_name": "nagy rókafarkfű", "group": "grass", "crop_tags": ["wheat", "general"]},
-    "Stellaria media": {"hu_name": "tyúkhúr", "group": "broadleaf", "crop_tags": ["wheat", "rape", "general"]},
-    "Lamium purpureum": {"hu_name": "piros árvacsalán", "group": "broadleaf", "crop_tags": ["wheat", "rape", "general"]},
-    "Lamium amplexicaule": {"hu_name": "szárölelő árvacsalán", "group": "broadleaf", "crop_tags": ["wheat", "rape", "general"]},
-    "Tripleurospermum inodorum": {"hu_name": "ebszékfű", "group": "broadleaf", "crop_tags": ["wheat", "rape", "general"]},
+    "Capsella bursa-pastoris": {
+        "hu_name": "pásztortáska",
+        "group": "broadleaf",
+        "crop_tags": ["wheat", "rape", "general"],
+    },
+    "Papaver rhoeas": {
+        "hu_name": "pipacs",
+        "group": "broadleaf",
+        "crop_tags": ["wheat", "general"],
+    },
+    "Veronica persica": {
+        "hu_name": "perzsa veronika",
+        "group": "broadleaf",
+        "crop_tags": ["wheat", "rape", "general"],
+    },
+    "Galium aparine": {
+        "hu_name": "ragadós galaj",
+        "group": "broadleaf",
+        "crop_tags": ["wheat", "rape", "general"],
+    },
+    "Chenopodium album": {
+        "hu_name": "fehér libatop",
+        "group": "broadleaf",
+        "crop_tags": ["maize", "sunflower", "soy", "beet", "general"],
+    },
+    "Conyza canadensis": {
+        "hu_name": "kanadai betyárkóró",
+        "group": "broadleaf",
+        "crop_tags": ["general"],
+    },
+    "Poa annua": {
+        "hu_name": "egynyári perje",
+        "group": "grass",
+        "crop_tags": ["wheat", "general"],
+    },
+    "Apera spica-venti": {
+        "hu_name": "nagy széltippan",
+        "group": "grass",
+        "crop_tags": ["wheat", "general"],
+    },
+    "Alopecurus myosuroides": {
+        "hu_name": "nagy rókafarkfű",
+        "group": "grass",
+        "crop_tags": ["wheat", "general"],
+    },
+    "Stellaria media": {
+        "hu_name": "tyúkhúr",
+        "group": "broadleaf",
+        "crop_tags": ["wheat", "rape", "general"],
+    },
+    "Lamium purpureum": {
+        "hu_name": "piros árvacsalán",
+        "group": "broadleaf",
+        "crop_tags": ["wheat", "rape", "general"],
+    },
+    "Lamium amplexicaule": {
+        "hu_name": "szárölelő árvacsalán",
+        "group": "broadleaf",
+        "crop_tags": ["wheat", "rape", "general"],
+    },
+    "Tripleurospermum inodorum": {
+        "hu_name": "ebszékfű",
+        "group": "broadleaf",
+        "crop_tags": ["wheat", "rape", "general"],
+    },
 }
 
 # -----------------------------
 # App
 # -----------------------------
-app = FastAPI(title="Plant Diagnosis API", version=APP_VERSION, openapi_version="3.1.0")
+app = FastAPI(
+    title="Plant Diagnosis API",
+    version=APP_VERSION,
+    openapi_version="3.1.0",
+)
 
 origins = ["*"] if ALLOWED_ORIGINS == "*" else [o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
@@ -78,7 +131,45 @@ def _confidence_level(score: float) -> str:
     return "low"
 
 
-def _plantnet_identify(image_bytes: bytes, project: str, top_k: int, organs: str = "leaf", debug: bool = False) -> Dict[str, Any]:
+def _weed_filter(candidates: List[Dict[str, Any]], crop: Optional[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    kept: List[Dict[str, Any]] = []
+    dropped: List[Dict[str, Any]] = []
+
+    crop_tag = (crop or "general").strip().lower()
+
+    for c in candidates:
+        sci = c.get("scientific_name", "")
+        meta = FIELD_WEEDS.get(sci)
+
+        if meta:
+            tags = [t.lower() for t in meta.get("crop_tags", [])]
+            enriched = dict(c)
+            enriched["hu_name"] = meta.get("hu_name")
+            enriched["group"] = meta.get("group")
+            enriched["crop_tags"] = meta.get("crop_tags")
+
+            if crop and crop_tag not in tags and "general" not in tags:
+                enriched["flag"] = "valószínű nem tipikus ebben a kultúrában"
+
+            kept.append(enriched)
+        else:
+            enriched = dict(c)
+            enriched["hu_name"] = None
+            enriched["group"] = None
+            enriched["crop_tags"] = ["unknown"]
+            enriched["flag"] = "valószínű nem gyom / nem a szántóföldi listában"
+            kept.append(enriched)
+
+    return kept, dropped
+
+
+def _plantnet_identify(
+    image_bytes: bytes,
+    project: str,
+    top_k: int,
+    organs: str = "leaf",
+    debug: bool = False,
+) -> Dict[str, Any]:
     if not PLANTNET_API_KEY:
         raise HTTPException(status_code=500, detail="Missing PLANTNET_API_KEY env var.")
 
@@ -87,20 +178,38 @@ def _plantnet_identify(image_bytes: bytes, project: str, top_k: int, organs: str
     files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
     data = {"organs": organs}
 
+    print("DEBUG_PLANTNET_URL:", url)
+    print("DEBUG_PLANTNET_PROJECT:", project)
+    print("DEBUG_PLANTNET_IMAGE_BYTES_LEN:", len(image_bytes))
+    print("DEBUG_PLANTNET_ORGANS:", organs)
+
     try:
         resp = requests.post(url, params=params, files=files, data=data, timeout=60)
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"PlantNet request failed: {e}")
 
     if resp.status_code != 200:
+        try:
+            err_json = resp.json()
+        except Exception:
+            err_json = {"raw_text": resp.text[:2000]}
+
+        debug_payload = {
+            "plantnet_url": str(resp.url),
+            "status_code": resp.status_code,
+            "response_body": err_json,
+        }
+
+        print("PLANTNET_ERROR:", json.dumps(debug_payload, ensure_ascii=False))
+
         raise HTTPException(
             status_code=502,
-            detail=f"PlantNet HTTP {resp.status_code}. url={resp.url}. body={resp.text[:800]}"
+            detail=json.dumps(debug_payload, ensure_ascii=False)
         )
 
     raw = resp.json()
-
     results = raw.get("results", []) or []
+
     candidates: List[Dict[str, Any]] = []
     for r in results[: max(1, min(top_k, 10))]:
         sp = r.get("species") or {}
@@ -121,34 +230,6 @@ def _plantnet_identify(image_bytes: bytes, project: str, top_k: int, organs: str
         "candidates": candidates,
         "raw": raw if debug else None,
     }
-
-
-def _weed_filter(candidates: List[Dict[str, Any]], crop: Optional[str]) -> (List[Dict[str, Any]], List[Dict[str, Any]]):
-    kept: List[Dict[str, Any]] = []
-    dropped: List[Dict[str, Any]] = []
-    crop_tag = (crop or "general").strip().lower()
-
-    for c in candidates:
-        sci = c.get("scientific_name", "")
-        meta = FIELD_WEEDS.get(sci)
-        if meta:
-            tags = [t.lower() for t in meta.get("crop_tags", [])]
-            enriched = dict(c)
-            enriched["hu_name"] = meta.get("hu_name")
-            enriched["group"] = meta.get("group")
-            enriched["crop_tags"] = meta.get("crop_tags")
-            if crop and crop_tag not in tags and "general" not in tags:
-                enriched["flag"] = "valószínű nem tipikus ebben a kultúrában"
-            kept.append(enriched)
-        else:
-            enriched = dict(c)
-            enriched["hu_name"] = None
-            enriched["group"] = None
-            enriched["crop_tags"] = ["unknown"]
-            enriched["flag"] = "valószínű nem gyom / nem a szántóföldi listában"
-            kept.append(enriched)
-
-    return kept, dropped
 
 
 def _build_gpt_friendly(mode: str, crop: Optional[str], result_block: Dict[str, Any]) -> Dict[str, Any]:
@@ -178,9 +259,14 @@ def _build_gpt_friendly(mode: str, crop: Optional[str], result_block: Dict[str, 
     }
 
 
-def _run_pipeline(image_bytes: bytes, mode: str, crop: Optional[str], project: str, top_k: int, debug: bool) -> Dict[str, Any]:
-    # Jelenleg mindhárom mód ugyanarra a PlantNet motorra megy rá.
-    # Később disease/pest külön logikára váltható.
+def _run_pipeline(
+    image_bytes: bytes,
+    mode: str,
+    crop: Optional[str],
+    project: str,
+    top_k: int,
+    debug: bool,
+) -> Dict[str, Any]:
     result_block = _plantnet_identify(
         image_bytes=image_bytes,
         project=project,
@@ -188,7 +274,9 @@ def _run_pipeline(image_bytes: bytes, mode: str, crop: Optional[str], project: s
         organs="leaf",
         debug=debug,
     )
+
     gpt_friendly = _build_gpt_friendly(mode=mode, crop=crop, result_block=result_block)
+
     return {
         "plantnet": {k: v for k, v in result_block.items() if k != "raw"},
         "gpt_friendly": gpt_friendly,
@@ -211,7 +299,11 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": APP_VERSION, "default_project": PLANTNET_PROJECT_DEFAULT}
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "default_project": PLANTNET_PROJECT_DEFAULT,
+    }
 
 
 @app.post("/v1/diagnose")
@@ -229,6 +321,7 @@ async def diagnose_multipart(
         raise HTTPException(status_code=400, detail="Empty image.")
 
     mode = (mode or "weed").strip().lower()
+
     payload = _run_pipeline(
         image_bytes=image_bytes,
         mode=mode,
@@ -288,6 +381,10 @@ async def diagnose_json(request: Request):
     note = data.get("note")
     debug = bool(data.get("debug") or False)
 
+    print("DEBUG_JSON_MODE:", mode)
+    print("DEBUG_JSON_PROJECT:", project)
+    print("DEBUG_IMAGE_B64_HEAD:", image_b64[:40])
+
     try:
         image_bytes = base64.b64decode(_strip_data_url_prefix(image_b64), validate=False)
     except Exception:
@@ -295,6 +392,8 @@ async def diagnose_json(request: Request):
 
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Bad Request: decoded image bytes are empty")
+
+    print("DEBUG_IMAGE_BYTES_LEN:", len(image_bytes))
 
     payload = _run_pipeline(
         image_bytes=image_bytes,
