@@ -1,6 +1,7 @@
 import os
 import json
 from typing import Any, Dict, List, Optional, Tuple
+from recommend_logic import find_products_by_crop_and_weed
 
 import httpx
 
@@ -387,4 +388,15 @@ async def weed_species_test():
     return {
         "count": len(rows),
         "items": [dict(r) for r in rows]
+    }
+
+
+@app.get("/recommend_test")
+async def recommend_test(crop: str, weed_latin: str):
+
+    items = find_products_by_crop_and_weed(crop, weed_latin)
+
+    return {
+        "count": len(items),
+        "items": items
     }
