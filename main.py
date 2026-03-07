@@ -61,6 +61,7 @@ async def _startup():
     import_products()
     import_product_usage()
     import_weed_species()
+    import_weed_master()
 
 
 @app.on_event("shutdown")
