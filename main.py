@@ -280,7 +280,10 @@ async def diagnose_files(
         raise HTTPException(status_code=422, detail="No valid download_link found in openaiFileIdRefs.")
 
     plantnet_raw = await _plantnet_identify(images=images, project=project, organs=organs)
+    
     compact = _compact_species_response(plantnet_raw, top_n=5)
+
+    mapped = map_plantnet_result(plantnet_raw)
 
     return {
         "project": project,
