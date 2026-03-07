@@ -367,3 +367,22 @@ async def diagnose_upload(
         "topN": 5,
         "plantnet": compact,
     }
+
+@app.get("/weed_species_test")
+async def weed_species_test():
+
+    from db import get_connection
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM product_weed_species LIMIT 10")
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return {
+        "count": len(rows),
+        "items": [dict(r) for r in rows]
+    }
