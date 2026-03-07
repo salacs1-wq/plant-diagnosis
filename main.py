@@ -231,6 +231,21 @@ async def health():
 async def version():
     return {"appVersion": APP_VERSION}
 
+@app.get("/products_test")
+async def products_test():
+    from db import get_connection
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM products LIMIT 10")
+    rows = cur.fetchall()
+    conn.close()
+
+    return {
+        "count": len(rows),
+        "items": [dict(row) for row in rows]
+    }
+
 
 @app.post("/diagnose_files")
 async def diagnose_files(
