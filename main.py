@@ -8,7 +8,7 @@ from fastapi import FastAPI, Body, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 
 from result_mapper import map_plantnet_result
-
+from weeds_logic import build_weed_summary
 
 # =========================
 # Config
@@ -284,6 +284,8 @@ async def diagnose_files(
     compact = _compact_species_response(plantnet_raw, top_n=5)
 
     mapped = map_plantnet_result(plantnet_raw)
+
+    weed_summary = build_weed_summary(mapped)
 
     return {
         "project": project,
