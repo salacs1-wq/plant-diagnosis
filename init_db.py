@@ -59,6 +59,18 @@ def init_db():
         )
     """)
 
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS weed_species_master (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            weed_latin TEXT,
+            weed_hungarian TEXT,
+            group_type TEXT,
+            main_crop TEXT,
+            notes TEXT
+        )
+    """)
+
+
     conn.commit()
     conn.close()
 
