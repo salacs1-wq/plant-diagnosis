@@ -28,6 +28,33 @@ def init_db():
         )
     """)
 
+    cur.execute(
+    """
+    CREATE TABLE IF NOT EXISTS product_usage (
+
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        product_id INTEGER,
+
+        scope_kultura TEXT,
+        kultura_lista TEXT,
+
+        karosito_lista TEXT,
+
+        dozis TEXT,
+        vizmennyiseg TEXT,
+
+        max_kezeles_szam TEXT,
+        min_kezelesi_intervallum TEXT,
+
+        elelmezeseu_varakozasi_ido TEXT,
+        munkaegeszsegugyi_varakozasi_ido TEXT,
+
+        scope_megjegyzes TEXT
+
+    )
+    """
+)
     conn.commit()
     conn.close()
 
