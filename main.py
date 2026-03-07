@@ -3,8 +3,11 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+
 from fastapi import FastAPI, Body, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+
+from result_mapper import map_plantnet_result
 
 
 # =========================
