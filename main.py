@@ -56,6 +56,7 @@ async def _startup():
 
     init_db()
     import_products()
+    import_product_usage()
 
 
 @app.on_event("shutdown")
