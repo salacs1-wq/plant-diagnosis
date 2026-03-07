@@ -235,6 +235,21 @@ async def version():
 async def products_test():
     from db import get_connection
 
+@app.get("/product_usage_test")
+async def product_usage_test():
+    from db import get_connection
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM product_usage LIMIT 10")
+    rows = cur.fetchall()
+    conn.close()
+
+    return {
+        "count": len(rows),
+        "items": [dict(row) for row in rows]
+    }
+
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM products LIMIT 10")
