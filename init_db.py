@@ -32,6 +32,29 @@ def init_db():
     """
     CREATE TABLE IF NOT EXISTS product_usage (
 
+    cur.execute(
+    """
+    CREATE TABLE IF NOT EXISTS product_weed_species (
+
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        product_id INTEGER,
+
+        crop TEXT,
+
+        weed_latin TEXT,
+        weed_hungarian TEXT,
+
+        source_type TEXT,
+        source_name TEXT,
+
+        priority INTEGER,
+        note TEXT
+
+    )
+    """
+)
+
         id INTEGER PRIMARY KEY AUTOINCREMENT,
 
         product_id INTEGER,
