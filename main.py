@@ -58,6 +58,7 @@ async def _startup():
     init_db()
     import_products()
     import_product_usage()
+    import_weed_species()
 
 
 @app.on_event("shutdown")
