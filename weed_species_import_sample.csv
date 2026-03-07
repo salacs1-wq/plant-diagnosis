@@ -1,0 +1,3 @@
+product_id,crop,weed_latin,weed_hungarian,source_type,source_name,priority,note
+1,oszi buza,Galium aparine,ragados galaj,manual,teszt,1,teszt sor 1
+2,kukorica,Echinochloa crus-galli,kakaslabfu,manual,teszt,1,teszt sor 2
