@@ -5,6 +5,7 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
 
+    # products
     cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,6 +29,7 @@ def init_db():
         )
     """)
 
+    # product_usage
     cur.execute("""
         CREATE TABLE IF NOT EXISTS product_usage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +47,7 @@ def init_db():
         )
     """)
 
+    # product_weed_species
     cur.execute("""
         CREATE TABLE IF NOT EXISTS product_weed_species (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +62,8 @@ def init_db():
         )
     """)
 
-        cur.execute("""
+    # weed_species_master
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS weed_species_master (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             weed_latin TEXT,
