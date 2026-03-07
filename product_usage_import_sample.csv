@@ -1,0 +1,3 @@
+product_id,scope_kultura,kultura_lista,karosito_lista,dozis,vizmennyiseg,max_kezeles_szam,min_kezelesi_intervallum,elelmezeseu_varakozasi_ido,munkaegeszsegugyi_varakozasi_ido,scope_megjegyzes
+1,kalaszos,oszi buza;durum buza,magrol kelo kettsziku gyomok,0.2 l/ha,200-300 l/ha,1,0,60 nap,0 nap,teszt sor 1
+2,kukorica,kukorica,magrol kelo es egyszikü gyomok,1.0 l/ha,200-300 l/ha,1,0,0 nap,0 nap,teszt sor 2
