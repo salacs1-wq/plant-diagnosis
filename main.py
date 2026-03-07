@@ -11,6 +11,7 @@ from result_mapper import map_plantnet_result
 from weeds_logic import build_weed_summary
 from init_db import init_db
 from import_master_products import import_products
+from import_product_usage import import_product_usage
 
 # =========================
 # Config
