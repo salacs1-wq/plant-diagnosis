@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from result_mapper import map_plantnet_result
 from weeds_logic import build_weed_summary
 from init_db import init_db
-from import_products import insert_sample_product
+from import_master_products import import_products
 
 # =========================
 # Config
@@ -54,7 +54,7 @@ async def _startup():
     app.state.http = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
 
     init_db()
-    insert_sample_product()
+    import_products()
 
 
 @app.on_event("shutdown")
