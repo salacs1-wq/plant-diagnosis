@@ -336,6 +336,7 @@ async def diagnose_files(
         "caseType": case_type,
         "topN": 5,
         "plantnet": compact,
+        "weedSummary": weed_summary,
     }
 
 
