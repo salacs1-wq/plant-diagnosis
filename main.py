@@ -371,6 +371,7 @@ async def diagnose_upload(
         "caseType": caseType,
         "topN": 5,
         "plantnet": compact,
+        "weedSummary": weed_summary,
     }
 
 @app.get("/weed_species_test")
