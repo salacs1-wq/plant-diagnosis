@@ -402,3 +402,6 @@ async def recommend_test(crop: str, weed_latin: str):
         "count": len(items),
         "items": items
     }
+from weed_lookup import find_weed_by_scientific_name
+
+print(find_weed_by_scientific_name("Taraxacum officinale"))
