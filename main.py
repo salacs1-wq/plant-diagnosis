@@ -349,23 +349,28 @@ async def diagnose_upload(
     """
     Manual upload endpoint for Swagger / browser testing.
     """
+
     content = await image.read()
+
     if not content or len(content) < 50:
         raise HTTPException(status_code=422, detail="Uploaded image is empty/too small.")
+
     if len(content) > MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=413, detail=f"Image too large (> {MAX_IMAGE_BYTES} bytes).")
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image too large (> {MAX_IMAGE_BYTES} bytes)."
+        )
 
     mime = image.content_type or "image/jpeg"
     name = image.filename or "image.jpg"
 
     plantnet_raw = await _plantnet_identify(
-    images=[(name, content, mime)],
-    project=project,
-    organs=None,  # IMPORTANT: do not send organs
-)
-compact = _compact_species_response(plantnet_raw, top_n=5)
+        images=[(name, content, mime)],
+        project=project,
+        organs=None,
+    )
 
-compact = _compact_species_response(plantnet_raw, top_n=5)
+    compact = _compact_species_response(plantnet_raw, top_n=5)
 
     return {
         "project": project,
@@ -374,7 +379,6 @@ compact = _compact_species_response(plantnet_raw, top_n=5)
         "topN": 5,
         "plantnet": compact,
     }
-
 
 @app.get("/weed_species_test")
 async def weed_species_test():
