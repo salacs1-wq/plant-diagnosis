@@ -696,3 +696,88 @@ async def case_get_targets(case_id: int):
             "pests": len(pest_rows)
         }
     }
+@app.get("/case_list")
+async def case_list():
+
+    from db import get_connection
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, crop, field_name, area_ha, status, created_at
+        FROM case_master
+        ORDER BY id DESC
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return {
+        "count": len(rows),
+        "items": [dict(r) for r in rows]
+    }
+
+
+@app.post("/recommend_from_case")
+async def recommend_from_case(payload: Dict[str, Any] = Body(...)):
+
+    from db import get_connection
+
+    case_id = payload.get("case_id")
+
+    if not case_id:
+        raise HTTPException(status_code=422, detail="case_id is required")
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # ---- case ----
+    cur.execute(
+        "SELECT crop FROM case_master WHERE id = ?",
+        (case_id,)
+    )
+    case_row = cur.fetchone()
+
+    if not case_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="case not found")
+
+    crop = case_row["crop"]
+
+    # ---- weeds ----
+    cur.execute(
+        "SELECT weed_latin FROM case_weeds WHERE case_id = ?",
+        (case_id,)
+    )
+
+    weeds = [r["weed_latin"] for r in cur.fetchall()]
+
+    if not weeds:
+        conn.close()
+        return {
+            "case_id": case_id,
+            "crop": crop,
+            "weeds": [],
+            "products": []
+        }
+
+    # ---- recommend ----
+    all_products = []
+
+    for w in weeds:
+        items = find_products_by_crop_and_weed(crop, w)
+
+        for it in items:
+            it["weed"] = w
+            all_products.append(it)
+
+    conn.close()
+
+    return {
+        "case_id": case_id,
+        "crop": crop,
+        "weeds": weeds,
+        "count": len(all_products),
+        "products": all_products
+    }
