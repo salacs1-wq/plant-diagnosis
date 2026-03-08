@@ -6,36 +6,36 @@ CSV_PATH = "products_master.csv"
 
 
 def is_package(row):
+    name = (row.get("name") or "").strip().lower()
+    data = (row.get("data") or "").strip().lower()
 
-    name = (row.get("name") or "").lower()
-    data = (row.get("data") or "").lower()
-
-    if "pack" in name:
-        return True
-
-    if "csomag" in name:
-        return True
-
-    if "bundle" in name:
-        return True
+    if not name:
+        return False
 
     if data == "package_2":
+        return True
+
+    if "pack" in name or "csomag" in name or "bundle" in name:
         return True
 
     return False
 
 
 def import_products():
-
     conn = get_connection()
     cur = conn.cursor()
 
-    with open(CSV_PATH, newline="", encoding="utf-8") as f:
-
-        reader = csv.DictReader(f, delimiter=";")
+    with open(CSV_PATH, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f, delimiter=",")
 
         for row in reader:
+            termek = (row.get("name") or "").strip()
 
+            # Üres sorok kihagyása
+            if not termek:
+                continue
+
+            # Csomagok kihagyása
             if is_package(row):
                 continue
 
@@ -44,30 +44,22 @@ def import_products():
                 INSERT INTO products (
                     termek,
                     nev_eredeti,
-                    engedelyszam,
                     engedely_tipus,
                     hatoanyagok,
                     forgalmi_kategoria_nebih,
-                    mehveszelyesseg,
-                    kiszereles,
-                    pack_amount,
                     okirat_pdf_url,
                     okirat_frissites_datum
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    row.get("name"),
-                    row.get("name"),
-                    row.get("permit"),
-                    row.get("type"),
-                    row.get("active"),
-                    row.get("category"),
-                    row.get("bee"),
-                    row.get("pack"),
-                    row.get("pack_amount"),
-                    row.get("pdf"),
-                    row.get("updated"),
+                    termek,                         # name
+                    termek,                         # name
+                    (row.get("data2") or "").strip() or None,
+                    (row.get("description") or "").strip() or None,
+                    (row.get("data3") or "").strip() or None,
+                    (row.get("image") or "").strip() or None,
+                    (row.get("data4") or "").strip() or None,
                 ),
             )
 
