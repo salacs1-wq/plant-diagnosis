@@ -367,13 +367,13 @@ compact = _compact_species_response(plantnet_raw, top_n=5)
 
 compact = _compact_species_response(plantnet_raw, top_n=5)
 
-return {
-    "project": project,
-    "mode": mode,
-    "caseType": caseType,
-    "topN": 5,
-    "plantnet": compact,
-}
+    return {
+        "project": project,
+        "mode": mode,
+        "caseType": caseType,
+        "topN": 5,
+        "plantnet": compact,
+    }
 
 
 @app.get("/weed_species_test")
