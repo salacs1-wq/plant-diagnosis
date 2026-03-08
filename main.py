@@ -413,3 +413,32 @@ async def recommend_test(crop: str, weed_latin: str):
         "count": len(items),
         "items": items,
     }
+
+@app.get("/case_tables_test")
+async def case_tables_test():
+
+    from db import get_connection
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    tables = [
+        "case_master",
+        "case_weeds",
+        "case_diseases",
+        "case_pests"
+    ]
+
+    result = {}
+
+    for t in tables:
+        try:
+            cur.execute(f"SELECT COUNT(*) FROM {t}")
+            count = cur.fetchone()[0]
+            result[t] = count
+        except Exception as e:
+            result[t] = str(e)
+
+    conn.close()
+
+    return result
