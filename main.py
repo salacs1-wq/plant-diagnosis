@@ -365,6 +365,8 @@ async def diagnose_upload(
 )
 compact = _compact_species_response(plantnet_raw, top_n=5)
 
+compact = _compact_species_response(plantnet_raw, top_n=5)
+
 return {
     "project": project,
     "mode": mode,
