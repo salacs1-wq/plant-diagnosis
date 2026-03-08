@@ -442,3 +442,42 @@ async def case_tables_test():
     conn.close()
 
     return result
+@app.post("/case_create")
+async def case_create(payload: Dict[str, Any] = Body(...)):
+    from db import get_connection
+
+    crop = (payload.get("crop") or "").strip()
+    field_name = (payload.get("field_name") or "").strip()
+    area_ha = payload.get("area_ha")
+    notes = (payload.get("notes") or "").strip()
+
+    if not crop:
+        raise HTTPException(status_code=422, detail="crop is required")
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO case_master (crop, field_name, area_ha, status, notes)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        crop,
+        field_name,
+        area_ha,
+        "diagnosis",
+        notes
+    ))
+
+    case_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "case_id": case_id,
+        "crop": crop,
+        "field_name": field_name,
+        "area_ha": area_ha,
+        "status": "diagnosis",
+        "notes": notes
+    }
