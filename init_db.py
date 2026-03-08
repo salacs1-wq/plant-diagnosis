@@ -74,6 +74,56 @@ def init_db():
         )
     """)
 
+    # case_master
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS case_master (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            crop TEXT,
+            field_name TEXT,
+            area_ha REAL,
+            status TEXT DEFAULT 'diagnosis',
+            notes TEXT
+        )
+    """)
+
+    # case_weeds
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS case_weeds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id INTEGER NOT NULL,
+            weed_latin TEXT NOT NULL,
+            weed_hungarian TEXT,
+            confirmed INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (case_id) REFERENCES case_master(id)
+        )
+    """)
+
+    # case_diseases
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS case_diseases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id INTEGER NOT NULL,
+            disease_name TEXT NOT NULL,
+            confirmed INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (case_id) REFERENCES case_master(id)
+        )
+    """)
+
+    # case_pests
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS case_pests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id INTEGER NOT NULL,
+            pest_name TEXT NOT NULL,
+            confirmed INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (case_id) REFERENCES case_master(id)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
