@@ -2,7 +2,7 @@ import csv
 from db import get_connection
 
 
-CSV_PATH = "agromedium-com-2026-01-29-novszer.csv"
+CSV_PATH = "products_master.csv"
 
 
 def is_package(row):
