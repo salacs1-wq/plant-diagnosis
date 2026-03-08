@@ -527,3 +527,116 @@ async def case_add_weed(payload: Dict[str, Any] = Body(...)):
         "weed_hungarian": weed_hungarian,
         "confirmed": 1
     }
+@app.get("/case_get_weeds")
+async def case_get_weeds(case_id: int):
+
+    from db import get_connection
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT id, weed_latin, weed_hungarian, confirmed FROM case_weeds WHERE case_id = ?",
+        (case_id,)
+    )
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return {
+        "case_id": case_id,
+        "count": len(rows),
+        "items": [dict(r) for r in rows]
+    }
+
+
+@app.post("/case_add_disease")
+async def case_add_disease(payload: Dict[str, Any] = Body(...)):
+
+    from db import get_connection
+
+    case_id = payload.get("case_id")
+    disease_name = (payload.get("disease_name") or "").strip()
+
+    if not case_id:
+        raise HTTPException(status_code=422, detail="case_id is required")
+
+    if not disease_name:
+        raise HTTPException(status_code=422, detail="disease_name is required")
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM case_master WHERE id = ?", (case_id,))
+    case_row = cur.fetchone()
+
+    if not case_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="case not found")
+
+    cur.execute("""
+        INSERT INTO case_diseases (case_id, disease_name, confirmed)
+        VALUES (?, ?, ?)
+    """, (
+        case_id,
+        disease_name,
+        1
+    ))
+
+    disease_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "id": disease_id,
+        "case_id": case_id,
+        "disease_name": disease_name,
+        "confirmed": 1
+    }
+
+
+@app.post("/case_add_pest")
+async def case_add_pest(payload: Dict[str, Any] = Body(...)):
+
+    from db import get_connection
+
+    case_id = payload.get("case_id")
+    pest_name = (payload.get("pest_name") or "").strip()
+
+    if not case_id:
+        raise HTTPException(status_code=422, detail="case_id is required")
+
+    if not pest_name:
+        raise HTTPException(status_code=422, detail="pest_name is required")
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM case_master WHERE id = ?", (case_id,))
+    case_row = cur.fetchone()
+
+    if not case_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="case not found")
+
+    cur.execute("""
+        INSERT INTO case_pests (case_id, pest_name, confirmed)
+        VALUES (?, ?, ?)
+    """, (
+        case_id,
+        pest_name,
+        1
+    ))
+
+    pest_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "id": pest_id,
+        "case_id": case_id,
+        "pest_name": pest_name,
+        "confirmed": 1
+    }
