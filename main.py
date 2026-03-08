@@ -359,20 +359,22 @@ async def diagnose_upload(
     name = image.filename or "image.jpg"
 
     plantnet_raw = await _plantnet_identify(
-        images=[(name, content, mime)],
-        project=project,
-        organs=None,  # IMPORTANT: do not send organs
-    )
-    compact = _compact_species_response(plantnet_raw, top_n=5)
+    images=[(name, content, mime)],
+    project=project,
+    organs=None,  # IMPORTANT: do not send organs
+)
+compact = _compact_species_response(plantnet_raw, top_n=5)
+mapped = map_plantnet_result(plantnet_raw)
+weed_summary = build_weed_summary(mapped)
 
-    return {
-        "project": project,
-        "mode": mode,
-        "caseType": caseType,
-        "topN": 5,
-        "plantnet": compact,
-        "weedSummary": weed_summary,
-    }
+return {
+    "project": project,
+    "mode": mode,
+    "caseType": caseType,
+    "topN": 5,
+    "plantnet": compact,
+    "weedSummary": weed_summary,
+}
 
 @app.get("/weed_species_test")
 async def weed_species_test():
