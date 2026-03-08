@@ -1,13 +1,12 @@
 import os
 import json
 from typing import Any, Dict, List, Optional, Tuple
-from recommend_logic import find_products_by_crop_and_weed
 
 import httpx
-
 from fastapi import FastAPI, Body, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 
+from recommend_logic import find_products_by_crop_and_weed
 from result_mapper import map_plantnet_result
 from weeds_logic import build_weed_summary
 from init_db import init_db
@@ -15,6 +14,7 @@ from import_master_products import import_products
 from import_product_usage import import_product_usage
 from import_weed_species import import_weed_species
 from import_weed_master import import_weed_master
+
 
 # =========================
 # Config
@@ -120,7 +120,10 @@ async def _download_image(url: str) -> Tuple[bytes, str]:
     client: httpx.AsyncClient = app.state.http
     r = await client.get(url, follow_redirects=True)
     if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail={"download_status": r.status_code, "download_error": _safe_json(r)})
+        raise HTTPException(
+            status_code=502,
+            detail={"download_status": r.status_code, "download_error": _safe_json(r)},
+        )
     content = r.content
     if not content or len(content) < 50:
         raise HTTPException(status_code=422, detail="Downloaded image is empty/too small.")
@@ -188,7 +191,7 @@ async def _plantnet_identify(
     client: httpx.AsyncClient = app.state.http
     last_error: Optional[httpx.Response] = None
 
-    for attempt in range(2):
+    for _ in range(2):
         r = await client.post(url, params=params, files=files)
         last_error = r
         if r.status_code < 500:
@@ -238,9 +241,22 @@ async def health():
 async def version():
     return {"appVersion": APP_VERSION}
 
+
 @app.get("/products_test")
 async def products_test():
     from db import get_connection
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM products LIMIT 10")
+    rows = cur.fetchall()
+    conn.close()
+
+    return {
+        "count": len(rows),
+        "items": [dict(row) for row in rows],
+    }
+
 
 @app.get("/product_usage_test")
 async def product_usage_test():
@@ -254,18 +270,7 @@ async def product_usage_test():
 
     return {
         "count": len(rows),
-        "items": [dict(row) for row in rows]
-    }
-
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM products LIMIT 10")
-    rows = cur.fetchall()
-    conn.close()
-
-    return {
-        "count": len(rows),
-        "items": [dict(row) for row in rows]
+        "items": [dict(row) for row in rows],
     }
 
 
@@ -303,7 +308,7 @@ async def diagnose_files(
         )
 
     project = (payload.get("project") or PLANTNET_DEFAULT_PROJECT) or PLANTNET_DEFAULT_PROJECT
-    organs = payload.get("organs")  # optional
+    organs = payload.get("organs")
     mode = (payload.get("mode") or "expert").strip()
     case_type = (payload.get("caseType") or "weed").strip()
 
@@ -322,11 +327,8 @@ async def diagnose_files(
         raise HTTPException(status_code=422, detail="No valid download_link found in openaiFileIdRefs.")
 
     plantnet_raw = await _plantnet_identify(images=images, project=project, organs=organs)
-    
     compact = _compact_species_response(plantnet_raw, top_n=5)
-
     mapped = map_plantnet_result(plantnet_raw)
-
     weed_summary = build_weed_summary(mapped)
 
     return {
@@ -383,32 +385,31 @@ async def diagnose_upload(
         "plantnet": compact,
         "weedSummary": weed_summary,
     }
+
+
 @app.get("/weed_species_test")
 async def weed_species_test():
-
     from db import get_connection
 
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("SELECT * FROM product_weed_species LIMIT 10")
-
     rows = cur.fetchall()
 
     conn.close()
 
     return {
         "count": len(rows),
-        "items": [dict(r) for r in rows]
+        "items": [dict(r) for r in rows],
     }
 
 
 @app.get("/recommend_test")
 async def recommend_test(crop: str, weed_latin: str):
-
     items = find_products_by_crop_and_weed(crop, weed_latin)
 
     return {
         "count": len(items),
-        "items": items
+        "items": items,
     }
