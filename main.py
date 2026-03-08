@@ -751,7 +751,8 @@ async def recommend_from_case(payload: Dict[str, Any] = Body(...)):
         (case_id,)
     )
 
-    weeds = [r["weed_latin"] for r in cur.fetchall()]
+    weed_rows = cur.fetchall()
+    weeds = [r["weed_latin"] for r in weed_rows]
 
     if not weeds:
         conn.close()
@@ -763,14 +764,28 @@ async def recommend_from_case(payload: Dict[str, Any] = Body(...)):
         }
 
     # ---- recommend ----
-    all_products = []
+    product_map = {}
 
     for w in weeds:
+
         items = find_products_by_crop_and_weed(crop, w)
 
         for it in items:
-            it["weed"] = w
-            all_products.append(it)
+
+            key = it.get("product_name")
+
+            if not key:
+                continue
+
+            if key not in product_map:
+                product_map[key] = {
+                    **it,
+                    "weeds": [w]
+                }
+            else:
+                product_map[key]["weeds"].append(w)
+
+    products = list(product_map.values())
 
     conn.close()
 
@@ -778,6 +793,6 @@ async def recommend_from_case(payload: Dict[str, Any] = Body(...)):
         "case_id": case_id,
         "crop": crop,
         "weeds": weeds,
-        "count": len(all_products),
-        "products": all_products
+        "count": len(products),
+        "products": products
     }
