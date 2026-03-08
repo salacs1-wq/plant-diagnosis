@@ -364,8 +364,6 @@ async def diagnose_upload(
     organs=None,  # IMPORTANT: do not send organs
 )
 compact = _compact_species_response(plantnet_raw, top_n=5)
-mapped = map_plantnet_result(plantnet_raw)
-weed_summary = build_weed_summary(mapped)
 
 return {
     "project": project,
@@ -373,7 +371,6 @@ return {
     "caseType": caseType,
     "topN": 5,
     "plantnet": compact,
-    "weedSummary": weed_summary,
 }
 
 @app.get("/weed_species_test")
