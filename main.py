@@ -373,6 +373,7 @@ return {
     "plantnet": compact,
 }
 
+
 @app.get("/weed_species_test")
 async def weed_species_test():
 
