@@ -481,3 +481,49 @@ async def case_create(payload: Dict[str, Any] = Body(...)):
         "status": "diagnosis",
         "notes": notes
     }
+@app.post("/case_add_weed")
+async def case_add_weed(payload: Dict[str, Any] = Body(...)):
+    from db import get_connection
+
+    case_id = payload.get("case_id")
+    weed_latin = (payload.get("weed_latin") or "").strip()
+    weed_hungarian = (payload.get("weed_hungarian") or "").strip()
+
+    if not case_id:
+        raise HTTPException(status_code=422, detail="case_id is required")
+
+    if not weed_latin:
+        raise HTTPException(status_code=422, detail="weed_latin is required")
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM case_master WHERE id = ?", (case_id,))
+    case_row = cur.fetchone()
+
+    if not case_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="case not found")
+
+    cur.execute("""
+        INSERT INTO case_weeds (case_id, weed_latin, weed_hungarian, confirmed)
+        VALUES (?, ?, ?, ?)
+    """, (
+        case_id,
+        weed_latin,
+        weed_hungarian,
+        1
+    ))
+
+    weed_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "id": weed_id,
+        "case_id": case_id,
+        "weed_latin": weed_latin,
+        "weed_hungarian": weed_hungarian,
+        "confirmed": 1
+    }
