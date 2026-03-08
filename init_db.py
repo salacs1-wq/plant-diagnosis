@@ -131,3 +131,55 @@ def init_db():
 if __name__ == "__main__":
     init_db()
     print("database ready")
+# =========================
+# product_prices
+# =========================
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS product_prices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER,
+    supplier TEXT,
+    pack_size TEXT,
+    price_net REAL,
+    price_calc REAL,
+    currency TEXT,
+    valid_from TEXT,
+    valid_to TEXT,
+    is_current INTEGER DEFAULT 1
+)
+""")
+
+
+# =========================
+# product_packages
+# =========================
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS product_packages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_name TEXT,
+    supplier TEXT,
+    price_net REAL,
+    price_calc REAL,
+    currency TEXT,
+    valid_from TEXT,
+    valid_to TEXT,
+    is_active INTEGER DEFAULT 1
+)
+""")
+
+
+# =========================
+# package_items
+# =========================
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS package_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_id INTEGER,
+    product_id INTEGER,
+    quantity REAL,
+    unit TEXT
+)
+""")
