@@ -7,18 +7,13 @@ def find_products_by_crop_and_weed(crop, weed_latin):
     cur = conn.cursor()
 
     query = """
-    SELECT p.*
+    SELECT DISTINCT p.*
     FROM products p
-
-    JOIN product_usage u
-        ON u.product_id = p.id
-
     JOIN product_weed_species w
         ON w.product_id = p.id
-
     WHERE
-        w.crop = ?
-        AND w.weed_latin = ?
+        lower(trim(w.crop)) = lower(trim(?))
+        AND lower(trim(w.weed_latin)) = lower(trim(?))
     """
 
     cur.execute(query, (crop, weed_latin))
