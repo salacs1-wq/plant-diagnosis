@@ -32,7 +32,7 @@ def import_products():
 
     with open(CSV_PATH, newline="", encoding="utf-8") as f:
 
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(f, delimiter=";")
 
         for row in reader:
 
