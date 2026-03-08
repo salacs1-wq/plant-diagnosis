@@ -640,3 +640,59 @@ async def case_add_pest(payload: Dict[str, Any] = Body(...)):
         "pest_name": pest_name,
         "confirmed": 1
     }
+@app.get("/case_get_targets")
+async def case_get_targets(case_id: int):
+
+    from db import get_connection
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, crop, field_name, area_ha, status, notes, created_at
+        FROM case_master
+        WHERE id = ?
+    """, (case_id,))
+    case_row = cur.fetchone()
+
+    if not case_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="case not found")
+
+    cur.execute("""
+        SELECT id, weed_latin, weed_hungarian, confirmed, created_at
+        FROM case_weeds
+        WHERE case_id = ?
+        ORDER BY id
+    """, (case_id,))
+    weed_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, disease_name, confirmed, created_at
+        FROM case_diseases
+        WHERE case_id = ?
+        ORDER BY id
+    """, (case_id,))
+    disease_rows = cur.fetchall()
+
+    cur.execute("""
+        SELECT id, pest_name, confirmed, created_at
+        FROM case_pests
+        WHERE case_id = ?
+        ORDER BY id
+    """, (case_id,))
+    pest_rows = cur.fetchall()
+
+    conn.close()
+
+    return {
+        "case": dict(case_row),
+        "weeds": [dict(r) for r in weed_rows],
+        "diseases": [dict(r) for r in disease_rows],
+        "pests": [dict(r) for r in pest_rows],
+        "counts": {
+            "weeds": len(weed_rows),
+            "diseases": len(disease_rows),
+            "pests": len(pest_rows)
+        }
+    }
