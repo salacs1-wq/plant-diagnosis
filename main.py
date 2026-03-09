@@ -1,5 +1,6 @@
 import os
 import json
+import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -17,6 +18,10 @@ from import_weed_master import import_weed_master
 from import_prices import import_prices
 
 
+def get_connection():
+    conn = sqlite3.connect("database.db")
+    conn.row_factory = sqlite3.Row
+    return conn
 # =========================
 # Config
 # =========================
