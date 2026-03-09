@@ -910,3 +910,16 @@ def init_db_v2():
             "status": "error",
             "message": str(e)
         }
+@app.post("/load_laudis")
+def load_laudis_endpoint():
+    try:
+        load_laudis()
+        return {
+            "status": "ok",
+            "message": "Laudis betöltve"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
