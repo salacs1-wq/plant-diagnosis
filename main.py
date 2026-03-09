@@ -407,13 +407,82 @@ async def weed_species_test():
     }
 
 
-@app.get("/recommend_test")
-async def recommend_test(crop: str, weed_latin: str):
-    items = find_products_by_crop_and_weed(crop, weed_latin)
+@app.get("/recommend")
+def recommend(
+    q: str = Query(..., description="Keresett gyom, kultúra, hatóanyag vagy terméknév"),
+    limit: int = Query(5, ge=1, le=20)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    like_q = f"%{q}%"
+
+    sql = """
+    SELECT
+        p.id,
+        p.termek,
+        p.nev_eredeti,
+        p.engedelyszam,
+        p.engedely_tipus,
+        p.hatoanyagok,
+        p.kultura,
+        p.celkarosito,
+        p.dozis,
+        pr.me,
+        pr.fk,
+        pr.kedvezmenyes_ar,
+        pr.kamatos_ar
+    FROM products p
+    LEFT JOIN prices pr
+        ON LOWER(TRIM(p.termek)) = LOWER(TRIM(pr.nev))
+    WHERE
+        LOWER(COALESCE(p.termek, '')) LIKE LOWER(?) OR
+        LOWER(COALESCE(p.nev_eredeti, '')) LIKE LOWER(?) OR
+        LOWER(COALESCE(p.hatoanyagok, '')) LIKE LOWER(?) OR
+        LOWER(COALESCE(p.kultura, '')) LIKE LOWER(?) OR
+        LOWER(COALESCE(p.celkarosito, '')) LIKE LOWER(?)
+    ORDER BY
+        CASE
+            WHEN LOWER(COALESCE(p.termek, '')) = LOWER(?) THEN 0
+            WHEN LOWER(COALESCE(p.termek, '')) LIKE LOWER(?) THEN 1
+            WHEN LOWER(COALESCE(p.hatoanyagok, '')) LIKE LOWER(?) THEN 2
+            WHEN LOWER(COALESCE(p.celkarosito, '')) LIKE LOWER(?) THEN 3
+            ELSE 4
+        END,
+        p.termek ASC
+    LIMIT ?
+    """
+
+    rows = cur.execute(
+        sql,
+        (
+            like_q,
+            like_q,
+            like_q,
+            like_q,
+            like_q,
+            q,
+            like_q,
+            like_q,
+            like_q,
+            limit,
+        ),
+    ).fetchall()
+
+    items = []
+    for row in rows:
+        item = dict(row)
+
+        # opcionális: számolt költség, ha van dózis és kedvezményes ár
+        item["koltseg_ha"] = None
+
+        items.append(item)
+
+    conn.close()
 
     return {
         "count": len(items),
-        "items": items,
+        "items": items
     }
 
 @app.get("/case_tables_test")
