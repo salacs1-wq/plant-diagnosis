@@ -1,1 +1,127 @@
+import sqlite3
 
+DB_PATH = "plant.db"
+
+
+def get_connection():
+    return sqlite3.connect(DB_PATH)
+
+
+def load_laudis():
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # --------------------
+    # PRODUCTS
+    # --------------------
+
+    cur.execute("""
+    INSERT INTO products (
+        termek,
+        rendeltetes,
+        hatoanyagok,
+        engedelyszam,
+        engedely_tipus,
+        formulacio,
+        forgalmi_kategoria,
+        kiszereles,
+        akg,
+        aop,
+        aop1,
+        aop4,
+        aop5,
+        mehveszelyesseg,
+        tulajdonos,
+        hazai_kepviselet,
+        forgalmazo,
+        gyarto,
+        forras_url
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        "Laudis",
+        "gyomirtó szer",
+        "izoxadifen-etil 22 g/l; tembotrion 44 g/l",
+        "02.5/2006/2/2007",
+        "alapengedély",
+        "OD",
+        "I",
+        "1 l, 5 l",
+        1,
+        1,
+        0,
+        0,
+        0,
+        "nem jelölésköteles",
+        "Bayer AG",
+        "Bayer Hungária Kft.",
+        "Bayer Hungária Kft.",
+        "Bayer AG",
+        "agromedium/laudis"
+    ))
+
+    # --------------------
+    # ACTIVE SUBSTANCES
+    # --------------------
+
+    cur.execute("""
+    INSERT INTO product_active_substances (
+        termek,
+        hatoanyag_nev,
+        mennyiseg,
+        hatoanyag_csoport,
+        hatasmod,
+        rac_besorolas,
+        forras_url
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        "Laudis",
+        "tembotrion",
+        "44 g/l",
+        "triketon",
+        "4-HPPD gátlás",
+        "HRAC F",
+        "agromedium/laudis"
+    ))
+
+    # --------------------
+    # PRODUCT USAGES
+    # --------------------
+
+    cur.execute("""
+    INSERT INTO product_usages (
+        termek,
+        kultura,
+        karosito,
+        dozis,
+        kezelesek_max_szama,
+        kezeles_ideje,
+        le_mennyiseg,
+        elelmezes_egeszsegugyi_varakozasi_ido,
+        munkaegeszsegugyi_varakozasi_ido,
+        forras_url
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        "Laudis",
+        "kukorica",
+        "magról kelő egyszikű gyomok",
+        "1.75-2.25 l/ha",
+        "1",
+        "poszt",
+        "250-300 l/ha",
+        "-",
+        "0 nap",
+        "agromedium/laudis"
+    ))
+
+    conn.commit()
+    conn.close()
+
+    print("OK - Laudis betöltve")
+
+
+if __name__ == "__main__":
+    load_laudis()
