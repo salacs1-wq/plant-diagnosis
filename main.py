@@ -7,6 +7,7 @@ from fastapi import FastAPI, Body, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from db import get_connection
+from scripts.init_db_v2 import create_tables
 
 from recommend_logic import find_products_by_crop_and_weed
 from result_mapper import map_plantnet_result
