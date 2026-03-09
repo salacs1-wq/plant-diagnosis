@@ -1,5 +1,6 @@
 import openpyxl
 from db import get_connection
+import os
 
 
 XLSX_PATH = "prices_source.xlsx"
@@ -29,13 +30,20 @@ def to_float(value):
 
 
 def import_prices():
+
+    if not os.path.exists(XLSX_PATH):
+        print("prices file not found, skip import")
+        return
+
     wb = openpyxl.load_workbook(XLSX_PATH, data_only=True)
     ws = wb.active
 
     conn = get_connection()
     cur = conn.cursor()
 
-    # Fejléc beolvasás
+    # törlés minden deploy előtt
+    cur.execute("DELETE FROM product_prices")
+
     headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
     header_map = {h: i for i, h in enumerate(headers)}
 
@@ -44,26 +52,26 @@ def import_prices():
     price_idx = header_map.get("Kedvezm.ár")
 
     if name_idx is None or price_idx is None:
-        raise ValueError("Hiányzik a szükséges oszlop: 'Név' vagy 'Kedvezm.ár'.")
+        raise ValueError("Hiányzik a szükséges oszlop")
 
     for row in ws.iter_rows(min_row=2, values_only=True):
-        product_name = str(row[name_idx]).strip() if row[name_idx] is not None else ""
-        pack_size = str(row[pack_idx]).strip() if pack_idx is not None and row[pack_idx] is not None else None
+
+        product_name = str(row[name_idx]).strip() if row[name_idx] else ""
+        pack_size = str(row[pack_idx]).strip() if pack_idx is not None and row[pack_idx] else None
         price_net = to_float(row[price_idx])
 
         if not product_name or price_net is None:
             continue
 
-        # products.termek alapján párosítunk
         cur.execute(
             """
-            SELECT id, termek
-            FROM products
+            SELECT id FROM products
             WHERE lower(trim(termek)) = lower(trim(?))
             LIMIT 1
             """,
             (product_name,)
         )
+
         product_row = cur.fetchone()
 
         if not product_row:
