@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from db import get_connection
 from scripts.init_db_v2 import create_tables
+from scripts.load_laudis_sample import load_laudis
 
 from recommend_logic import find_products_by_crop_and_weed
 from result_mapper import map_plantnet_result
