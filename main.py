@@ -798,3 +798,18 @@ async def recommend_from_case(payload: Dict[str, Any] = Body(...)):
         "count": len(products),
         "products": products
     }
+from scripts.prices_clean_import import main as run_prices_import
+
+@app.post("/import_prices")
+def import_prices():
+    try:
+        run_prices_import()
+        return {
+            "status": "ok",
+            "message": "A prices import lefutott."
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
