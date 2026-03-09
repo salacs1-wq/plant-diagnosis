@@ -1,11 +1,4 @@
-import sqlite3
-
-DB_PATH = "plant.db"
-
-
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    return conn
+from db import get_connection
 
 
 def create_tables():
@@ -13,78 +6,82 @@ def create_tables():
     conn = get_connection()
     cur = conn.cursor()
 
-    # -----------------------
-    # PRODUCTS
-    # -----------------------
+    # ===== RESET TABLES =====
+
+    cur.execute("DROP TABLE IF EXISTS product_active_substances")
+    cur.execute("DROP TABLE IF EXISTS product_usages")
+    cur.execute("DROP TABLE IF EXISTS products")
+
+    # ===== PRODUCTS =====
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS products (
+
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        termek TEXT,
+
+        name TEXT,
         rendeltetes TEXT,
-        hatoanyagok TEXT,
+
         engedelyszam TEXT,
         engedely_tipus TEXT,
-        formulacio TEXT,
-        forgalmi_kategoria TEXT,
-        kiszereles TEXT,
-        akg INTEGER,
-        aop INTEGER,
-        aop1 INTEGER,
-        aop4 INTEGER,
-        aop5 INTEGER,
-        mehveszelyesseg TEXT,
+
         tulajdonos TEXT,
-        hazai_kepviselet TEXT,
         forgalmazo TEXT,
-        gyarto TEXT,
-        dokumentum_url TEXT,
-        forras_url TEXT
+
+        formulacio TEXT,
+        kategoria TEXT,
+
+        kiszereles TEXT,
+        eltarthatosag TEXT,
+
+        aop1 TEXT,
+        aop4 TEXT,
+        aop5 TEXT,
+        okologia TEXT
+
     )
     """)
 
-    # -----------------------
-    # PRODUCT_USAGES
-    # -----------------------
+    # ===== PRODUCT USAGES =====
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS product_usages (
+
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        termek TEXT,
+
+        product_id INTEGER,
+
         kultura TEXT,
         karosito TEXT,
+
         dozis TEXT,
-        kezelesek_max_szama TEXT,
+        kezeles_szam TEXT,
         kezeles_ideje TEXT,
-        le_mennyiseg TEXT,
-        elelmezes_egeszsegugyi_varakozasi_ido TEXT,
-        munkaegeszsegugyi_varakozasi_ido TEXT,
-        forras_url TEXT
+
+        elelmezesi_varakozas TEXT,
+        munkaegeszsegugyi_varakozas TEXT
+
     )
     """)
 
-    # -----------------------
-    # ACTIVE SUBSTANCES
-    # -----------------------
+    # ===== ACTIVE SUBSTANCES =====
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS product_active_substances (
+
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        termek TEXT,
-        hatoanyag_nev TEXT,
+
+        product_id INTEGER,
+
+        hatoanyag TEXT,
         mennyiseg TEXT,
+
         hatoanyag_csoport TEXT,
         hatasmod TEXT,
-        rac_besorolas TEXT,
-        forras_url TEXT
+        rac TEXT
+
     )
     """)
 
     conn.commit()
     conn.close()
-
-    print("OK")
-
-
-if __name__ == "__main__":
-    create_tables()
