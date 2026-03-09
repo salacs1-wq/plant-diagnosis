@@ -3,7 +3,7 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import FastAPI, Body, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Body, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from recommend_logic import find_products_by_crop_and_weed
