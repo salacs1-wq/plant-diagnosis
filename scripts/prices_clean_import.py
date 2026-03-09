@@ -105,7 +105,7 @@ def load_input_file(path: str) -> pd.DataFrame:
     ext = Path(path).suffix.lower()
 
     if ext in [".xlsx", ".xls"]:
-        return pd.read_excel(path)
+        return pd.read_excel(path, header=1)
     elif ext == ".csv":
         # először próbáljuk pontosvesszővel, aztán vesszővel
         try:
