@@ -4,8 +4,8 @@ import re
 from pathlib import Path
 
 # ====== Beállítások ======
-INPUT_FILE = "data/prices.xlsx"      # ide tedd az új árlistát
-DB_PATH = "data/database.db"
+INPUT_FILE = "prices_source.xlsx"
+DB_PATH = "database.db"
 TABLE_NAME = "prices"
 
 
