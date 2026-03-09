@@ -428,7 +428,6 @@ def recommend(
         p.engedelyszam,
         p.engedely_tipus,
         p.hatoanyagok,
-        p.kultura,
         p.celkarosito,
         p.dozis,
         pr.me,
@@ -442,7 +441,6 @@ def recommend(
         LOWER(COALESCE(p.termek, '')) LIKE LOWER(?) OR
         LOWER(COALESCE(p.nev_eredeti, '')) LIKE LOWER(?) OR
         LOWER(COALESCE(p.hatoanyagok, '')) LIKE LOWER(?) OR
-        LOWER(COALESCE(p.kultura, '')) LIKE LOWER(?) OR
         LOWER(COALESCE(p.celkarosito, '')) LIKE LOWER(?)
     ORDER BY
         CASE
@@ -459,7 +457,6 @@ def recommend(
     rows = cur.execute(
         sql,
         (
-            like_q,
             like_q,
             like_q,
             like_q,
