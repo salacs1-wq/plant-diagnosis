@@ -896,3 +896,16 @@ def debug_products_columns():
     rows = cur.execute("PRAGMA table_info(products)").fetchall()
     conn.close()
     return [dict(r) for r in rows]
+@app.post("/init_db_v2")
+def init_db_v2():
+    try:
+        create_tables()
+        return {
+            "status": "ok",
+            "message": "Az új táblák létrejöttek."
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
