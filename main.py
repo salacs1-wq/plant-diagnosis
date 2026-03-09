@@ -14,6 +14,7 @@ from import_master_products import import_products
 from import_product_usage import import_product_usage
 from import_weed_species import import_weed_species
 from import_weed_master import import_weed_master
+from import_prices import import_prices
 
 
 # =========================
@@ -62,6 +63,7 @@ async def _startup():
     import_product_usage()
     import_weed_species()
     import_weed_master()
+    import_prices()
 
 
 @app.on_event("shutdown")
