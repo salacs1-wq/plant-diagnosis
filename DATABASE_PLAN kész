@@ -1,0 +1,55 @@
+# Laudis minta
+
+Forrás:
+https://agromedium.com/hu-hu/novenyvedo-szerek/10003637-laudis
+
+## products mezők
+
+- termek: Laudis
+- rendeltetes: gyomirtó szer
+- hatoanyagok: izoxadifen-etil 22 g/l; tembotrion 44 g/l
+- engedelyszam: 02.5/2006/2/2007.
+- engedely_tipus: alapengedély
+- formulacio: olaj alapú szuszpenzió koncentrátum (OD)
+- forgalmi_kategoria: I. kategória
+- kiszereles: 1 l, 5 l
+- akg: igen
+- aop: igen
+- aop1: nem
+- aop4: nem
+- aop5: nem
+- mehveszelyesseg: nem jelölésköteles
+- tulajdonos: Bayer AG
+- hazai_kepviselet: Bayer Hungária Kft.
+- forgalmazo: Bayer Hungária Kft.
+- gyarto: Bayer AG
+- forras_url: https://agromedium.com/hu-hu/novenyvedo-szerek/10003637-laudis
+
+## product_active_substances mezők
+
+### 1.
+- termek: Laudis
+- hatoanyag_nev: izoxadifen-etil
+- mennyiseg: 22 g/l
+
+### 2.
+- termek: Laudis
+- hatoanyag_nev: tembotrion
+- mennyiseg: 44 g/l
+- hatoanyag_csoport: triketon
+- hatasmod: Plasztokinon bioszintézis (4-HPPD) gátlás
+- rac_besorolas: HRAC F
+
+## product_usages mezők
+
+### 1.
+- termek: Laudis
+- kultura: kukorica (takarmány, vetőmag, csemege, siló, pattogatni való)
+- karosito: magról kelő egyszikű gyomok
+- dozis: 1,75-2,25 l/ha
+- kezelesek_max_szama: 1
+- kezeles_ideje: posztemergensen 8 leveles állapotig
+- le_mennyiseg: 250-300 l/ha
+- elelmezes_egeszsegugyi_varakozasi_ido: -
+- munkaegeszsegugyi_varakozasi_ido: 0 nap
+- forras_url: https://agromedium.com/hu-hu/novenyvedo-szerek/10003637-laudis
