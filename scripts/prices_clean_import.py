@@ -5,7 +5,7 @@ from pathlib import Path
 
 # ====== Beállítások ======
 INPUT_FILE = "prices_source.xlsx"
-DB_PATH = "database.db"
+DB_PATH = "plant.db"
 TABLE_NAME = "prices"
 
 
