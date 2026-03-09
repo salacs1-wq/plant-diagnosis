@@ -421,53 +421,48 @@ def recommend(
     like_q = f"%{q}%"
 
     sql = """
-    SELECT
-        p.id,
-        p.termek,
-        p.nev_eredeti,
-        p.engedelyszam,
-        p.engedely_tipus,
-        p.hatoanyagok,
-        p.celkarosito,
-        p.dozis,
-        pr.me,
-        pr.fk,
-        pr.kedvezmenyes_ar,
-        pr.kamatos_ar
-    FROM products p
-    LEFT JOIN prices pr
-        ON LOWER(TRIM(p.termek)) = LOWER(TRIM(pr.nev))
-    WHERE
-        LOWER(COALESCE(p.termek, '')) LIKE LOWER(?) OR
-        LOWER(COALESCE(p.nev_eredeti, '')) LIKE LOWER(?) OR
-        LOWER(COALESCE(p.hatoanyagok, '')) LIKE LOWER(?) OR
-        LOWER(COALESCE(p.celkarosito, '')) LIKE LOWER(?)
-    ORDER BY
-        CASE
-            WHEN LOWER(COALESCE(p.termek, '')) = LOWER(?) THEN 0
-            WHEN LOWER(COALESCE(p.termek, '')) LIKE LOWER(?) THEN 1
-            WHEN LOWER(COALESCE(p.hatoanyagok, '')) LIKE LOWER(?) THEN 2
-            WHEN LOWER(COALESCE(p.celkarosito, '')) LIKE LOWER(?) THEN 3
-            ELSE 4
-        END,
-        p.termek ASC
-    LIMIT ?
-    """
+SELECT
+    p.id,
+    p.termek,
+    p.nev_eredeti,
+    p.engedelyszam,
+    p.engedely_tipus,
+    p.hatoanyagok,
+    p.dozis,
+    pr.me,
+    pr.fk,
+    pr.kedvezmenyes_ar,
+    pr.kamatos_ar
+FROM products p
+LEFT JOIN prices pr
+    ON LOWER(TRIM(p.termek)) = LOWER(TRIM(pr.nev))
+WHERE
+    LOWER(COALESCE(p.termek, '')) LIKE LOWER(?) OR
+    LOWER(COALESCE(p.nev_eredeti, '')) LIKE LOWER(?) OR
+    LOWER(COALESCE(p.hatoanyagok, '')) LIKE LOWER(?)
+ORDER BY
+    CASE
+        WHEN LOWER(COALESCE(p.termek, '')) = LOWER(?) THEN 0
+        WHEN LOWER(COALESCE(p.termek, '')) LIKE LOWER(?) THEN 1
+        WHEN LOWER(COALESCE(p.hatoanyagok, '')) LIKE LOWER(?) THEN 2
+        ELSE 3
+    END,
+    p.termek ASC
+LIMIT ?
+"""
 
     rows = cur.execute(
-        sql,
-        (
-            like_q,
-            like_q,
-            like_q,
-            like_q,
-            q,
-            like_q,
-            like_q,
-            like_q,
-            limit,
-        ),
-    ).fetchall()
+    sql,
+    (
+        like_q,   # p.termek
+        like_q,   # p.nev_eredeti
+        like_q,   # p.hatoanyagok
+        q,        # pontos termek egyezés
+        like_q,   # termek LIKE
+        like_q,   # hatoanyagok LIKE
+        limit,
+    ),
+).fetchall()
 
     items = []
     for row in rows:
