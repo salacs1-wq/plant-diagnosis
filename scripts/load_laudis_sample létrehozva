@@ -16,50 +16,54 @@ def load_laudis():
     # PRODUCTS
     # --------------------
 
-    cur.execute("""
-    INSERT INTO products (
-        termek,
-        rendeltetes,
-        hatoanyagok,
-        engedelyszam,
-        engedely_tipus,
-        formulacio,
-        forgalmi_kategoria,
-        kiszereles,
-        akg,
-        aop,
-        aop1,
-        aop4,
-        aop5,
-        mehveszelyesseg,
-        tulajdonos,
-        hazai_kepviselet,
-        forgalmazo,
-        gyarto,
-        forras_url
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        "Laudis",
-        "gyomirtó szer",
-        "izoxadifen-etil 22 g/l; tembotrion 44 g/l",
-        "02.5/2006/2/2007",
-        "alapengedély",
-        "OD",
-        "I",
-        "1 l, 5 l",
-        1,
-        1,
-        0,
-        0,
-        0,
-        "nem jelölésköteles",
-        "Bayer AG",
-        "Bayer Hungária Kft.",
-        "Bayer Hungária Kft.",
-        "Bayer AG",
-        "agromedium/laudis"
-    ))
+ cur.execute("""
+INSERT INTO products (
+    termek,
+    rendeltetes,
+    hatoanyagok,
+    engedelyszam,
+    engedely_tipus,
+    formulacio,
+    forgalmi_kategoria,
+    kiszereles,
+    akg,
+    aop,
+    aop1,
+    aop4,
+    aop5,
+    mehveszelyesseg,
+    tulajdonos,
+    hazai_kepviselet,
+    forgalmazo,
+    gyarto,
+    agromedium_id,
+    agromedium_url,
+    forras_url
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""", (
+    "Laudis",
+    "gyomirtó szer",
+    "izoxadifen-etil 22 g/l; tembotrion 44 g/l",
+    "02.5/2006/2/2007",
+    "alapengedély",
+    "OD",
+    "I",
+    "1 l, 5 l",
+    1,
+    1,
+    0,
+    0,
+    0,
+    "nem jelölésköteles",
+    "Bayer AG",
+    "Bayer Hungária Kft.",
+    "Bayer Hungária Kft.",
+    "Bayer AG",
+    "10003637",
+    "https://www.agromedium.com/hu-hu/novenyvedo-szerek/10003637",
+    "agromedium"
+))
 
     # --------------------
     # ACTIVE SUBSTANCES
