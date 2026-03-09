@@ -18,6 +18,7 @@ from import_product_usage import import_product_usage
 from import_weed_species import import_weed_species
 from import_weed_master import import_weed_master
 from import_prices import import_prices
+from scripts.migrate_add_agromedium_fields import migrate
 
 
 
@@ -919,6 +920,23 @@ def load_laudis_endpoint():
             "message": "Laudis betöltve"
         }
     except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+@app.post("/migrate_agromedium")
+def migrate_agromedium():
+
+    try:
+        migrate()
+
+        return {
+            "status": "ok",
+            "message": "agromedium mezők hozzáadva"
+        }
+
+    except Exception as e:
+
         return {
             "status": "error",
             "message": str(e)
