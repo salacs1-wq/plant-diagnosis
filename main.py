@@ -949,18 +949,7 @@ def import_prices():
             "status": "error",
             "message": str(e)
         }
-@app.get("/debug_products_columns")
-def debug_products_columns():
-    conn = get_connection()
-    cur = conn.cursor()
 
-    rows = cur.execute(
-        "PRAGMA table_info(products)"
-    ).fetchall()
-
-    conn.close()
-
-    return [dict(r) for r in rows]
 @app.get("/debug_products_columns")
 def debug_products_columns():
     conn = get_connection()
