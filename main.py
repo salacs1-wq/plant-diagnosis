@@ -510,16 +510,7 @@ async def diagnose_upload(
         "crop_match": crop_match,
         "mode_assessment": mode_assessment
     }
-    return {
-        "project": project,
-        "organs": organs,
-        "mode": mode,
-        "caseType": case_type,
-        "topN": 5,
-        "plantnet": compact,
-        "weedSummary": weed_summary,
-    }
-
+    
 
     """
     Manual upload endpoint for Swagger / browser testing.
