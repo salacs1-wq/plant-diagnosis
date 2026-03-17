@@ -292,12 +292,13 @@ async def diagnose_files(
                     "name": "field_image.jpg",
                     "id": "file_...",
                     "mime_type": "image/jpeg",
-                    "download_link": "https://....",
+                    "download_link": "https://...."
                 }
             ],
             "project": "k-middle-europe",
-            "mode": "expert",
-            "caseType": "weed",
+            "mode": "weed",
+            "top_k": 5,
+            "weed_only": True
         },
     ),
     x_api_key: Optional[str] = None,
@@ -315,30 +316,200 @@ async def diagnose_files(
             detail="openaiFileIdRefs is missing/empty. Attach at least 1 image in the chat message.",
         )
 
-    project = (payload.get("project") or PLANTNET_DEFAULT_PROJECT) or PLANTNET_DEFAULT_PROJECT
+    mode = (payload.get("mode") or "weed").strip().lower()
+    if mode not in {"weed", "plant", "pest", "disease"}:
+        mode = "weed"
+
+    top_k = int(payload.get("top_k") or 5)
+    top_k = max(1, min(top_k, 10))
+
+    weed_only = payload.get("weed_only")
+    if weed_only is None:
+        weed_only = (mode == "weed")
+    else:
+        weed_only = bool(weed_only)
+
+    project = (payload.get("project") or PLANTNET_DEFAULT_PROJECT).strip() or PLANTNET_DEFAULT_PROJECT
     organs = payload.get("organs")
-    mode = (payload.get("mode") or "expert").strip()
-    case_type = (payload.get("caseType") or "weed").strip()
 
     images: List[Tuple[str, bytes, str]] = []
     for ref in openai_refs[:MAX_IMAGES]:
-        if not isinstance(ref, dict):
-            continue
-        dl = (ref.get("download_link") or "").strip()
-        if not dl:
-            continue
-        name = (ref.get("name") or "image.jpg").strip()
-        content, mime = await _download_image(dl)
-        images.append((name, content, mime))
+        if isinstance(ref, dict):
+            dl = (ref.get("download_link") or "").strip()
+            if not dl:
+                continue
+            name = (ref.get("name") or "image.jpg").strip()
+            content, mime = await _download_image(dl)
+            images.append((name, content, mime))
 
     if not images:
         raise HTTPException(status_code=422, detail="No valid download_link found in openaiFileIdRefs.")
 
     plantnet_raw = await _plantnet_identify(images=images, project=project, organs=organs)
-    compact = _compact_species_response(plantnet_raw, top_n=5)
-    mapped = map_plantnet_result(plantnet_raw)
-    weed_summary = build_weed_summary(mapped)
+    results = plantnet_raw.get("results") or []
 
+    normalized_top = []
+    for idx, item in enumerate(results[:top_k], start=1):
+        species = item.get("species") or {}
+        score = float(item.get("score") or 0.0)
+
+        latin = species.get("scientificNameWithoutAuthor") or species.get("scientificName") or ""
+        common_names = species.get("commonNames") or []
+        hungarian_name = common_names[0] if common_names else ""
+
+        normalized_top.append({
+            "rank": idx,
+            "species": latin,
+            "hungarian_name": hungarian_name,
+            "score": score,
+            "is_weed": False
+        })
+
+    top_match = normalized_top[0] if normalized_top else {
+        "rank": 1,
+        "species": "",
+        "hungarian_name": "",
+        "score": 0.0,
+        "is_weed": False
+    }
+
+    crop_match = None
+    mode_assessment = None
+
+    if mode in {"disease", "pest"}:
+        crop_match = {
+            "species": top_match["species"],
+            "hungarian_name": top_match["hungarian_name"],
+            "score": top_match["score"]
+        }
+
+        mode_assessment = {
+            "disease_signal": False,
+            "pest_signal": False,
+            "note": ""
+        }
+
+        if mode == "disease":
+            mode_assessment["note"] = "A rendszer a kultúrnövényt azonosította, de külön betegséget nem azonosított megbízhatóan."
+        elif mode == "pest":
+            mode_assessment["note"] = "A rendszer a kultúrnövényt azonosította, de külön kártevőt nem azonosított megbízhatóan."
+
+    return {
+        "success": True,
+        "mode": mode,
+        "message": "Sikeres diagnózis",
+        "top_match": {
+            "species": top_match["species"],
+            "hungarian_name": top_match["hungarian_name"],
+            "score": top_match["score"],
+            "is_weed": top_match["is_weed"]
+        },
+        "top5": normalized_top,
+        "crop_match": crop_match,
+        "mode_assessment": mode_assessment
+    }
+
+
+@app.post("/diagnose_upload")
+async def diagnose_upload(
+    image: UploadFile = File(...),
+    project: str = Form(PLANTNET_DEFAULT_PROJECT),
+    mode: str = Form("weed"),
+    top_k: int = Form(5),
+    weed_only: bool = Form(True),
+):
+    """
+    Manual upload endpoint for Swagger / browser testing.
+    """
+
+    content = await image.read()
+
+    if not content or len(content) < 50:
+        raise HTTPException(status_code=422, detail="Uploaded image is empty/too small.")
+
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image too large (> {MAX_IMAGE_BYTES} bytes)."
+        )
+
+    mime = image.content_type or "image/jpeg"
+    name = image.filename or "image.jpg"
+
+    mode = (mode or "weed").strip().lower()
+    if mode not in {"weed", "plant", "pest", "disease"}:
+        mode = "weed"
+
+    top_k = max(1, min(int(top_k or 5), 10))
+
+    plantnet_raw = await _plantnet_identify(
+        images=[(name, content, mime)],
+        project=project,
+        organs=None,
+    )
+
+    results = plantnet_raw.get("results") or []
+
+    normalized_top = []
+    for idx, item in enumerate(results[:top_k], start=1):
+        species = item.get("species") or {}
+        score = float(item.get("score") or 0.0)
+
+        latin = species.get("scientificNameWithoutAuthor") or species.get("scientificName") or ""
+        common_names = species.get("commonNames") or []
+        hungarian_name = common_names[0] if common_names else ""
+
+        normalized_top.append({
+            "rank": idx,
+            "species": latin,
+            "hungarian_name": hungarian_name,
+            "score": score,
+            "is_weed": False
+        })
+
+    top_match = normalized_top[0] if normalized_top else {
+        "rank": 1,
+        "species": "",
+        "hungarian_name": "",
+        "score": 0.0,
+        "is_weed": False
+    }
+
+    crop_match = None
+    mode_assessment = None
+
+    if mode in {"disease", "pest"}:
+        crop_match = {
+            "species": top_match["species"],
+            "hungarian_name": top_match["hungarian_name"],
+            "score": top_match["score"]
+        }
+
+        mode_assessment = {
+            "disease_signal": False,
+            "pest_signal": False,
+            "note": ""
+        }
+
+        if mode == "disease":
+            mode_assessment["note"] = "A rendszer a kultúrnövényt azonosította, de külön betegséget nem azonosított megbízhatóan."
+        elif mode == "pest":
+            mode_assessment["note"] = "A rendszer a kultúrnövényt azonosította, de külön kártevőt nem azonosított megbízhatóan."
+
+    return {
+        "success": True,
+        "mode": mode,
+        "message": "Sikeres diagnózis",
+        "top_match": {
+            "species": top_match["species"],
+            "hungarian_name": top_match["hungarian_name"],
+            "score": top_match["score"],
+            "is_weed": top_match["is_weed"]
+        },
+        "top5": normalized_top,
+        "crop_match": crop_match,
+        "mode_assessment": mode_assessment
+    }
     return {
         "project": project,
         "organs": organs,
