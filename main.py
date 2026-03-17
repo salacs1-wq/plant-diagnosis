@@ -394,60 +394,6 @@ async def diagnose_files(
         elif mode == "pest":
             mode_assessment["note"] = "A rendszer a kultúrnövényt azonosította, de külön kártevőt nem azonosított megbízhatóan."
 
-    return {
-        "success": True,
-        "mode": mode,
-        "message": "Sikeres diagnózis",
-        "top_match": {
-            "species": top_match["species"],
-            "hungarian_name": top_match["hungarian_name"],
-            "score": top_match["score"],
-            "is_weed": top_match["is_weed"]
-        },
-        "top5": normalized_top,
-        "crop_match": crop_match,
-        "mode_assessment": mode_assessment
-    }
-
-
-@app.post("/diagnose_upload")
-async def diagnose_upload(
-    image: UploadFile = File(...),
-    project: str = Form(PLANTNET_DEFAULT_PROJECT),
-    mode: str = Form("weed"),
-    top_k: int = Form(5),
-    weed_only: bool = Form(True),
-):
-    """
-    Manual upload endpoint for Swagger / browser testing.
-    """
-
-    content = await image.read()
-
-    if not content or len(content) < 50:
-        raise HTTPException(status_code=422, detail="Uploaded image is empty/too small.")
-
-    if len(content) > MAX_IMAGE_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Image too large (> {MAX_IMAGE_BYTES} bytes)."
-        )
-
-    mime = image.content_type or "image/jpeg"
-    name = image.filename or "image.jpg"
-
-    mode = (mode or "weed").strip().lower()
-    if mode not in {"weed", "plant", "pest", "disease"}:
-        mode = "weed"
-
-    top_k = max(1, min(int(top_k or 5), 10))
-
-    plantnet_raw = await _plantnet_identify(
-        images=[(name, content, mime)],
-        project=project,
-        organs=None,
-    )
-
     results = plantnet_raw.get("results") or []
 
     normalized_top = []
@@ -511,24 +457,6 @@ async def diagnose_upload(
         "mode_assessment": mode_assessment
     }
     
-
-    """
-    Manual upload endpoint for Swagger / browser testing.
-    """
-
-    content = await image.read()
-
-    if not content or len(content) < 50:
-        raise HTTPException(status_code=422, detail="Uploaded image is empty/too small.")
-
-    if len(content) > MAX_IMAGE_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Image too large (> {MAX_IMAGE_BYTES} bytes)."
-        )
-
-    mime = image.content_type or "image/jpeg"
-    name = image.filename or "image.jpg"
 
     plantnet_raw = await _plantnet_identify(
         images=[(name, content, mime)],
