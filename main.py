@@ -34,7 +34,7 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "").strip()
 # PlantNet
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "").strip()
 PLANTNET_BASE_URL = os.getenv("PLANTNET_BASE_URL", "https://my-api.plantnet.org").rstrip("/")
-PLANTNET_DEFAULT_PROJECT = os.getenv("PLANTNET_PROJECT", "weurope")  # weurope / all / k-middle-europe etc.
+PLANTNET_DEFAULT_PROJECT = os.getenv("PLANTNET_PROJECT", "k-middle-europe")  # weurope / all / k-middle-europe etc.
 
 # HTTP
 HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "60"))
