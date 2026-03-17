@@ -521,13 +521,6 @@ async def diagnose_upload(
     }
 
 
-@app.post("/diagnose_upload")
-async def diagnose_upload(
-    image: UploadFile = File(...),
-    project: str = Form(PLANTNET_DEFAULT_PROJECT),
-    mode: str = Form("expert"),
-    caseType: str = Form("weed"),
-):
     """
     Manual upload endpoint for Swagger / browser testing.
     """
@@ -551,20 +544,6 @@ async def diagnose_upload(
         project=project,
         organs=None,
     )
-
-    compact = _compact_species_response(plantnet_raw, top_n=5)
-    mapped = map_plantnet_result(plantnet_raw)
-    weed_summary = build_weed_summary(mapped)
-
-    return {
-        "project": project,
-        "mode": mode,
-        "caseType": caseType,
-        "topN": 5,
-        "plantnet": compact,
-        "weedSummary": weed_summary,
-    }
-
 
 @app.get("/weed_species_test")
 async def weed_species_test():
