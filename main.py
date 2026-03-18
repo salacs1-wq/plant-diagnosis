@@ -80,20 +80,29 @@ async def analyze(file: UploadFile = File(...), mode: str = "weed"):
 
 @app.post("/diagnoseFiles")
 async def diagnose_files(req: DiagnoseRequest):
+    mode = (req.mode or "weed").strip().lower()
 
-    if not API_KEY:
-        raise HTTPException(500, "Missing API key")
+    if mode not in ["weed", "disease", "pest"]:
+        mode = "weed"
 
-    mode = req.mode or "weed"
-
-    # GPT fájlok nem mindig jönnek át → csak jelzés
     if not req.openaiFileIdRefs:
         return {
             "status": "error",
+            "mode": mode,
             "message": "No file received",
-            "mode": mode
+            "context_flags": {
+                "no_file": True
+            }
         }
 
+    return {
+        "status": "error",
+        "mode": mode,
+        "message": "A GPT fájlreferencia megérkezett, de a backend még nem kap valódi képfájlt a PlantNet elemzéshez.",
+        "context_flags": {
+            "gpt_file_bridge_missing": True
+        }
+    }
     # ideiglenes: GPT file nem mindig elérhető → demo válasz
 
     return {
