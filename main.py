@@ -17,13 +17,16 @@ class ImageRequest(BaseModel):
 # =========================
 def download_image(image_url: str):
     try:
-        response = requests.get(image_url, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+
+        response = requests.get(image_url, headers=headers, timeout=10)
         response.raise_for_status()
 
-        # DEBUG (Railway logban látod)
         print("IMAGE SIZE:", len(response.content))
 
-        return response.content  # 🔥 nyers bytes
+        return response.content
 
     except Exception as e:
         raise Exception(f"Image download error: {str(e)}")
