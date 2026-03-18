@@ -1,5 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from typing import Optional
+from fastapi import FastAPI, UploadFile, File, HTTPException
 import requests
 import shutil
 import os
@@ -8,7 +7,7 @@ import uuid
 app = FastAPI()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "")
-PLANTNET_PROJECT = "k-middle-europe"
+PLANTNET_PROJECT = "all"
 
 
 @app.get("/")
@@ -16,7 +15,7 @@ def root():
     return {
         "status": "ok",
         "service": "plant-diagnosis",
-        "message": "Railway backend online"
+        "message": "3-route backend online"
     }
 
 
@@ -36,23 +35,11 @@ def save_upload_to_temp(upload: UploadFile) -> str:
     return temp_path
 
 
-def save_url_to_temp(url: str) -> str:
-    temp_path = f"/tmp/{uuid.uuid4()}.jpg"
-    resp = requests.get(url, timeout=60)
-    resp.raise_for_status()
-    with open(temp_path, "wb") as f:
-        f.write(resp.content)
-    return temp_path
-
-
-def call_plantnet(image_path: str, mode: str) -> dict:
+def call_plantnet_weed(image_path: str) -> dict:
     if not PLANTNET_API_KEY:
         raise HTTPException(status_code=500, detail="Hiányzik a PLANTNET_API_KEY environment variable.")
 
-    if mode == "weed":
-        url = f"https://my-api.plantnet.org/v2/identify/{PLANTNET_PROJECT}?api-key={PLANTNET_API_KEY}"
-    else:
-        url = f"https://my-api.plantnet.org/v2/diseases/identify?api-key={PLANTNET_API_KEY}"
+    url = f"https://my-api.plantnet.org/v2/identify/{PLANTNET_PROJECT}?api-key={PLANTNET_API_KEY}"
 
     with open(image_path, "rb") as img:
         files = {
@@ -66,7 +53,6 @@ def call_plantnet(image_path: str, mode: str) -> dict:
     if response.status_code != 200:
         return {
             "status": "error",
-            "mode": mode,
             "status_code": response.status_code,
             "raw_response": response.text
         }
@@ -77,7 +63,6 @@ def call_plantnet(image_path: str, mode: str) -> dict:
     if not results:
         return {
             "status": "ok",
-            "mode": mode,
             "commentary": "Nincs találat.",
             "context_flags": {"no_result": True},
             "raw": payload
@@ -85,100 +70,124 @@ def call_plantnet(image_path: str, mode: str) -> dict:
 
     top = results[0]
     score = top.get("score", 0)
-
-    if mode == "weed":
-        species = top.get("species", {})
-        species_name = species.get("scientificNameWithoutAuthor", "Ismeretlen")
-
-        return {
-            "status": "ok",
-            "mode": mode,
-            "species": species_name,
-            "score": score,
-            "commentary": f"Felismert növény: {species_name} ({round(score * 100)}%)",
-            "context_flags": {},
-            "raw": payload
-        }
-
-    label = top.get("description") or top.get("name") or "Ismeretlen"
-
-    if mode == "disease":
-        commentary = f"Lehetséges betegség: {label} ({round(score * 100)}%)"
-    else:
-        commentary = f"Lehetséges kártevő: {label} ({round(score * 100)}%)"
+    species = top.get("species", {})
+    species_name = species.get("scientificNameWithoutAuthor", "Ismeretlen")
 
     return {
         "status": "ok",
-        "mode": mode,
-        "label": label,
+        "mode": "weed",
+        "species": species_name,
         "score": score,
-        "commentary": commentary,
+        "commentary": f"Felismert növény: {species_name} ({round(score * 100)}%)",
         "context_flags": {},
         "raw": payload
     }
 
 
-@app.post("/analyze")
-async def analyze(
-    file: Optional[UploadFile] = File(None),
-    mode: Optional[str] = Form("weed"),
-    image_path: Optional[str] = Form(None),
-    file_id: Optional[str] = Form(None)
-):
-    mode = (mode or "weed").strip().lower()
-    if mode not in ["weed", "disease", "pest"]:
-        mode = "weed"
+def call_plantnet_disease(image_path: str) -> dict:
+    if not PLANTNET_API_KEY:
+        raise HTTPException(status_code=500, detail="Hiányzik a PLANTNET_API_KEY environment variable.")
 
+    url = f"https://my-api.plantnet.org/v2/diseases/identify?api-key={PLANTNET_API_KEY}"
+
+    with open(image_path, "rb") as img:
+        files = {
+            "images": (os.path.basename(image_path), img, "image/jpeg")
+        }
+        data = {
+            "organs": "auto"
+        }
+        response = requests.post(url, files=files, data=data, timeout=60)
+
+    if response.status_code != 200:
+        return {
+            "status": "error",
+            "status_code": response.status_code,
+            "raw_response": response.text
+        }
+
+    payload = response.json()
+    results = payload.get("results", [])
+
+    if not results:
+        return {
+            "status": "ok",
+            "mode": "disease",
+            "commentary": "Nincs találat.",
+            "context_flags": {"no_result": True},
+            "raw": payload
+        }
+
+    top = results[0]
+    score = top.get("score", 0)
+    label = top.get("description") or top.get("name") or "Ismeretlen"
+
+    return {
+        "status": "ok",
+        "mode": "disease",
+        "label": label,
+        "score": score,
+        "commentary": f"Lehetséges betegség: {label} ({round(score * 100)}%)",
+        "context_flags": {},
+        "raw": payload
+    }
+
+
+def call_plantnet_pest(image_path: str) -> dict:
+    if not PLANTNET_API_KEY:
+        raise HTTPException(status_code=500, detail="Hiányzik a PLANTNET_API_KEY environment variable.")
+
+    url = f"https://my-api.plantnet.org/v2/diseases/identify?api-key={PLANTNET_API_KEY}"
+
+    with open(image_path, "rb") as img:
+        files = {
+            "images": (os.path.basename(image_path), img, "image/jpeg")
+        }
+        data = {
+            "organs": "auto"
+        }
+        response = requests.post(url, files=files, data=data, timeout=60)
+
+    if response.status_code != 200:
+        return {
+            "status": "error",
+            "status_code": response.status_code,
+            "raw_response": response.text
+        }
+
+    payload = response.json()
+    results = payload.get("results", [])
+
+    if not results:
+        return {
+            "status": "ok",
+            "mode": "pest",
+            "commentary": "Nincs találat.",
+            "context_flags": {"no_result": True},
+            "raw": payload
+        }
+
+    top = results[0]
+    score = top.get("score", 0)
+    label = top.get("description") or top.get("name") or "Ismeretlen"
+
+    return {
+        "status": "ok",
+        "mode": "pest",
+        "label": label,
+        "score": score,
+        "commentary": f"Lehetséges kártevő: {label} ({round(score * 100)}%)",
+        "context_flags": {},
+        "raw": payload
+    }
+
+
+@app.post("/analyze-weed")
+async def analyze_weed(file: UploadFile = File(...)):
     temp_path = None
-
     try:
-        # 1. Normál fájlfeltöltés
-        if file is not None:
-            temp_path = save_upload_to_temp(file)
-
-        # 2. Ha a GPT/valami URL-t küld
-        elif image_path:
-            if image_path.startswith("http://") or image_path.startswith("https://"):
-                temp_path = save_url_to_temp(image_path)
-
-            # 3. Ha a szerveren tényleges helyi elérési út
-            elif os.path.exists(image_path):
-                temp_path = image_path
-
-            else:
-                return {
-                    "status": "error",
-                    "mode": mode,
-                    "message": "Az image_path megérkezett, de nem URL és nem létező helyi fájl a backend számára.",
-                    "context_flags": {
-                        "image_path_unreachable": True
-                    }
-                }
-
-        # 4. GPT file_id fallback
-        elif file_id:
-            return {
-                "status": "error",
-                "mode": mode,
-                "message": "A file_id megérkezett, de a backend közvetlen OpenAI-fájl letöltés nincs bekötve.",
-                "context_flags": {
-                    "file_id_not_supported": True
-                }
-            }
-
-        # 5. Semmi kép nem jött
-        else:
-            return {
-                "status": "error",
-                "mode": mode,
-                "message": "No image received",
-                "context_flags": {
-                    "no_image": True
-                }
-            }
-
-        return call_plantnet(temp_path, mode)
-
+        temp_path = save_upload_to_temp(file)
+        return call_plantnet_weed(temp_path)
     except requests.Timeout:
         raise HTTPException(status_code=504, detail="PlantNet időtúllépés.")
     except requests.RequestException as e:
@@ -187,7 +196,47 @@ async def analyze(
         raise HTTPException(status_code=500, detail=f"Belső hiba: {str(e)}")
     finally:
         try:
-            if temp_path and temp_path.startswith("/tmp/") and os.path.exists(temp_path):
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+
+
+@app.post("/analyze-disease")
+async def analyze_disease(file: UploadFile = File(...)):
+    temp_path = None
+    try:
+        temp_path = save_upload_to_temp(file)
+        return call_plantnet_disease(temp_path)
+    except requests.Timeout:
+        raise HTTPException(status_code=504, detail="PlantNet időtúllépés.")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Hálózati hiba: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Belső hiba: {str(e)}")
+    finally:
+        try:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+
+
+@app.post("/analyze-pest")
+async def analyze_pest(file: UploadFile = File(...)):
+    temp_path = None
+    try:
+        temp_path = save_upload_to_temp(file)
+        return call_plantnet_pest(temp_path)
+    except requests.Timeout:
+        raise HTTPException(status_code=504, detail="PlantNet időtúllépés.")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Hálózati hiba: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Belső hiba: {str(e)}")
+    finally:
+        try:
+            if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
         except Exception:
             pass
