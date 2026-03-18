@@ -8,7 +8,7 @@ import uuid
 app = FastAPI()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "")
-PLANTNET_PROJECT = "all"
+PLANTNET_PROJECT = "k-middle-europe"
 
 
 @app.get("/")
