@@ -1,10 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
-from PIL import Image
-from io import BytesIO
 
 app = FastAPI()
+
 
 # =========================
 # REQUEST MODEL
@@ -14,65 +13,81 @@ class ImageRequest(BaseModel):
 
 
 # =========================
-# IMAGE DOWNLOAD
+# IMAGE DOWNLOAD (STABIL)
 # =========================
 def download_image(image_url: str):
     try:
         response = requests.get(image_url, timeout=10)
         response.raise_for_status()
-        return Image.open(BytesIO(response.content))
+
+        # DEBUG (Railway logban látod)
+        print("IMAGE SIZE:", len(response.content))
+
+        return response.content  # 🔥 nyers bytes
+
     except Exception as e:
         raise Exception(f"Image download error: {str(e)}")
 
 
 # =========================
-# MOCK ANALYSIS (IDE JÖN A VALÓDI LOGIKA)
-# =========================
-def analyze_image_stub(mode: str):
-    return {
-        "status": "success",
-        "mode": mode,
-        "result": {
-            "top1": "minta találat",
-            "confidence": 0.87
-        }
-    }
-
-
-# =========================
 # ENDPOINTS
 # =========================
+
 @app.post("/analyze-weed")
 async def analyze_weed(req: ImageRequest):
-    if not req.image_url:
-        raise HTTPException(400, "No image_url provided")
+    try:
+        img = download_image(req.image_url)
 
-    image = download_image(req.image_url)
+        return {
+            "status": "success",
+            "mode": "weed",
+            "image_size": len(img)
+        }
 
-    result = analyze_image_stub("weed")
-    return result
+    except Exception as e:
+        return {
+            "status": "error",
+            "mode": "weed",
+            "message": str(e)
+        }
 
 
 @app.post("/analyze-disease")
 async def analyze_disease(req: ImageRequest):
-    if not req.image_url:
-        raise HTTPException(400, "No image_url provided")
+    try:
+        img = download_image(req.image_url)
 
-    image = download_image(req.image_url)
+        return {
+            "status": "success",
+            "mode": "disease",
+            "image_size": len(img)
+        }
 
-    result = analyze_image_stub("disease")
-    return result
+    except Exception as e:
+        return {
+            "status": "error",
+            "mode": "disease",
+            "message": str(e)
+        }
 
 
 @app.post("/analyze-pest")
 async def analyze_pest(req: ImageRequest):
-    if not req.image_url:
-        raise HTTPException(400, "No image_url provided")
+    try:
+        img = download_image(req.image_url)
 
-    image = download_image(req.image_url)
+        return {
+            "status": "success",
+            "mode": "pest",
+            "image_size": len(img)
+        }
 
-    result = analyze_image_stub("pest")
-    return result
+    except Exception as e:
+        return {
+            "status": "error",
+            "mode": "pest",
+            "message": str(e)
+        }
 
 
 # =========================
@@ -80,4 +95,7 @@ async def analyze_pest(req: ImageRequest):
 # =========================
 @app.get("/")
 def root():
-    return {"status": "ok", "version": "v2.3"}
+    return {
+        "status": "ok",
+        "version": "v2.3-stable"
+    }
