@@ -12,7 +12,11 @@ PROJECT = "all"
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "plant-diagnosis"}
+    return {
+        "status": "ok",
+        "service": "plant-diagnosis",
+        "message": "Railway backend online"
+    }
 
 
 @app.get("/ping")
@@ -23,7 +27,10 @@ def ping():
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...), mode: str = "weed"):
     if not API_KEY:
-        raise HTTPException(status_code=500, detail="Hiányzik a PLANTNET_API_KEY environment variable.")
+        raise HTTPException(
+            status_code=500,
+            detail="Hiányzik a PLANTNET_API_KEY environment variable."
+        )
 
     mode = (mode or "weed").strip().lower()
 
@@ -31,7 +38,9 @@ async def analyze(file: UploadFile = File(...), mode: str = "weed"):
         mode = "weed"
 
     file_id = str(uuid.uuid4())
-    ext = os.path.splitext(file.filename or "")[1].lower()
+    original_name = file.filename or "upload.jpg"
+    ext = os.path.splitext(original_name)[1].lower()
+
     if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
         ext = ".jpg"
 
@@ -52,6 +61,7 @@ async def analyze(file: UploadFile = File(...), mode: str = "weed"):
             files = {
                 "images": (os.path.basename(file_path), img, content_type)
             }
+
             data = {
                 "organs": "auto"
             }
@@ -79,7 +89,9 @@ async def analyze(file: UploadFile = File(...), mode: str = "weed"):
                 "status": "ok",
                 "mode": mode,
                 "commentary": "Nincs találat.",
-                "context_flags": {"no_result": True},
+                "context_flags": {
+                    "no_result": True
+                },
                 "raw": payload
             }
 
