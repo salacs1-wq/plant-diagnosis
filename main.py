@@ -30,15 +30,15 @@ class DiagnoseRequest(BaseModel):
 # VALIDATION
 # =========================
 def validate_request(req: DiagnoseRequest) -> None:
+    # 🔥 fallback értékek
     if req.project != "k-middle-europe":
-        raise ValueError("A project mezőnek 'k-middle-europe' értékűnek kell lennie.")
+        req.project = "k-middle-europe"
 
     if req.mode != "expert":
-        raise ValueError("A mode mezőnek 'expert' értékűnek kell lennie.")
+        req.mode = "expert"
 
     if req.caseType not in ["weed", "disease", "pest"]:
         raise ValueError("A caseType csak 'weed', 'disease' vagy 'pest' lehet.")
-
 
 # =========================
 # FILE DOWNLOAD
