@@ -69,8 +69,13 @@ def call_plantnet_identify(image_bytes: bytes) -> Dict[str, Any]:
     if not PLANTNET_API_KEY:
         raise ValueError("Hiányzik a PLANTNET_API_KEY környezeti változó.")
 
-    url = "https://my-api.plantnet.org/v2/identify/all"
-    params = {"api-key": PLANTNET_API_KEY}
+    url = "https://my-api.plantnet.org/v2/identify"
+    params = {
+        "api-key": PLANTNET_API_KEY,
+        "project": "k-middle-europe",
+        "include-related-images": "false"
+    }
+
     files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
     data = {"organs": "leaf"}
 
@@ -91,6 +96,7 @@ def call_plantnet_diseases(image_bytes: bytes) -> Dict[str, Any]:
 
     url = "https://my-api.plantnet.org/v2/diseases/identify"
     params = {"api-key": PLANTNET_API_KEY}
+
     files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
     data = {"organs": "leaf"}
 
@@ -103,6 +109,31 @@ def call_plantnet_diseases(image_bytes: bytes) -> Dict[str, Any]:
     )
     response.raise_for_status()
     return response.json()
+
+
+# =========================
+# SAFE WRAPPERS
+# =========================
+def safe_identify(image_bytes: bytes) -> Dict[str, Any]:
+    try:
+        return call_plantnet_identify(image_bytes)
+    except Exception as e:
+        return {
+            "error": True,
+            "message": str(e),
+            "results": []
+        }
+
+
+def safe_disease(image_bytes: bytes) -> Dict[str, Any]:
+    try:
+        return call_plantnet_diseases(image_bytes)
+    except Exception as e:
+        return {
+            "error": True,
+            "message": str(e),
+            "results": []
+        }
 
 
 # =========================
@@ -206,17 +237,25 @@ def format_disease_pest_list(results: List[Dict[str, Any]]) -> List[Dict[str, An
     return formatted
 
 
-def extract_crop_candidates(dp_response: Dict[str, Any]) -> List[Dict[str, Any]]:
-    # Csak akkor adunk vissza kultúrnövény TOP listát,
-    # ha a PlantNet válaszban VAN külön crop mező.
-    for key in ["cropCandidates", "crops", "crop_matches", "cropMatches"]:
-        value = dp_response.get(key)
-        if isinstance(value, list) and value:
-            return format_crop_top5(value)
+# =========================
+# BUILD HELPERS
+# =========================
+def build_crop_top5(identify_response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    results = identify_response.get("results")
 
-    # NINCS fallback a results mezőre,
-    # mert az már a betegségek és kártevők közös listája lehet.
-    return []
+    if not isinstance(results, list) or not results:
+        return []
+
+    return format_crop_top5(results)
+
+
+def build_dp_list(dp_response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    results = dp_response.get("results")
+
+    if not isinstance(results, list):
+        return []
+
+    return format_disease_pest_list(results)
 
 
 # =========================
@@ -237,7 +276,7 @@ async def diagnose(req: DiagnoseRequest):
         download_link = get_download_link(req.openaiFileIdRefs)
         image_bytes = download_image(download_link)
 
-        plantnet_response = call_plantnet_identify(image_bytes)
+        plantnet_response = safe_identify(image_bytes)
         results = plantnet_response.get("results", [])
         top5 = format_weed_top5(results)
 
@@ -273,31 +312,27 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
         download_link = get_download_link(req.openaiFileIdRefs)
         image_bytes = download_image(download_link)
 
-        # -------- NÖVÉNY AZONOSÍTÁS --------
-        identify_response = call_plantnet_identify(image_bytes)
+        identify_response = safe_identify(image_bytes)
+        dp_response = safe_disease(image_bytes)
 
-        # -------- BETEGSÉG / KÁRTEVŐ --------
-        dp_response = call_plantnet_diseases(image_bytes)
+        crop_top5 = build_crop_top5(identify_response)
+        dp_list = build_dp_list(dp_response)
 
-        raw_results = dp_response.get("results", [])
-        if not isinstance(raw_results, list):
-            raw_results = []
-
-        # ✅ kultúrnövény az identify válaszból
-        crop_top5 = format_crop_top5(
-            identify_response.get("results", [])
-        )
-
-        # ✅ betegségek + kártevők
-        diseases_and_pests = format_disease_pest_list(raw_results)
+        flags = {
+            "identify_ok": not identify_response.get("error", False),
+            "dp_ok": not dp_response.get("error", False),
+            "has_crop": len(crop_top5) > 0,
+            "has_dp": len(dp_list) > 0
+        }
 
         return {
             "status": "success",
             "mode": req.caseType,
-            "message": "Sikeres betegség/kártevő diagnózis",
+            "message": "Stabil betegség/kártevő diagnózis",
             "crop_top5": crop_top5,
-            "diseases_and_pests_top": diseases_and_pests,
-            "raw_count": len(raw_results)
+            "diseases_and_pests_top": dp_list,
+            "context_flags": flags,
+            "raw_count": len(dp_list)
         }
 
     except Exception as e:
@@ -307,9 +342,10 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
             "message": str(e)
         }
 
+
 @app.get("/")
 def root():
     return {
         "status": "ok",
-        "version": "stable-gpt-2-endpoints-v3"
+        "version": "stable-final-v1"
     }
