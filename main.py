@@ -106,28 +106,13 @@ def call_plantnet_diseases(image_bytes: bytes) -> Dict[str, Any]:
 
 
 # =========================
-# COMMON FORMATTERS
+# FORMAT HELPERS
 # =========================
 def pick_hungarian_name(species: Dict[str, Any]) -> Optional[str]:
     common_names = species.get("commonNames", [])
     if common_names and isinstance(common_names, list):
         return common_names[0]
     return None
-
-
-def format_weed_top5(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    formatted = []
-
-    for idx, item in enumerate(results[:5], start=1):
-        species = item.get("species", {})
-        formatted.append({
-            "rank": idx,
-            "latin_name": species.get("scientificNameWithoutAuthor", "ismeretlen"),
-            "hungarian_name": pick_hungarian_name(species),
-            "score": round(item.get("score", 0), 5)
-        })
-
-    return formatted
 
 
 def first_nonempty_str(values: List[Any]) -> Optional[str]:
@@ -145,168 +130,95 @@ def normalize_score(item: Dict[str, Any]) -> float:
         return 0.0
 
 
-# =========================
-# DISEASE / PEST HELPERS
-# =========================
-PEST_KEYWORDS = [
-    "pest", "insect", "mite", "aphid", "thrips", "beetle", "weevil", "leaf beetle",
-    "fly", "moth", "bug", "hopper", "cicad", "caterpillar", "larva", "slug", "snail",
-    "atka", "levéltetű", "tripsz", "bogár", "ormányos", "légy", "moly", "poloska",
-    "kabóca", "hernyó", "lárva", "csiga", "meztelencsiga", "oulema"
-]
+def format_weed_top5(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    formatted = []
 
-DISEASE_KEYWORDS = [
-    "disease", "fungus", "fungal", "mildew", "rust", "blight", "spot", "mold",
-    "rot", "smut", "septoria", "fusarium", "powdery mildew", "downy mildew",
-    "peronospora", "blumeria", "alternaria", "necrosis", "virus", "bacteria",
-    "betegség", "gomba", "lisztharmat", "rozsda", "foltosság", "penész",
-    "rothadás", "üszög", "fuzárium", "peronoszpóra", "alternária"
-]
+    for idx, item in enumerate(results[:5], start=1):
+        species = item.get("species", {})
+        formatted.append({
+            "rank": idx,
+            "latin_name": species.get("scientificNameWithoutAuthor", "ismeretlen"),
+            "hungarian_name": pick_hungarian_name(species),
+            "score": round(item.get("score", 0), 5)
+        })
+
+    return formatted
 
 
-def stringify_item(item: Dict[str, Any]) -> str:
-    return " ".join([
-        str(item.get("label", "")),
-        str(item.get("name", "")),
-        str(item.get("title", "")),
-        str(item.get("common_name", "")),
-        str(item.get("commonName", "")),
-        str(item.get("scientificName", "")),
-        str(item.get("scientificNameWithoutAuthor", "")),
-        str(item.get("type", "")),
-        str(item.get("category", "")),
-        str(item.get("entityType", "")),
-        str(item.get("kind", "")),
-        str(item.get("healthIssueType", "")),
-    ]).lower()
+def format_crop_top5(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    formatted = []
 
-
-def classify_dp_result(item: Dict[str, Any]) -> str:
-    text = stringify_item(item)
-
-    if any(keyword in text for keyword in PEST_KEYWORDS):
-        return "pest"
-
-    if any(keyword in text for keyword in DISEASE_KEYWORDS):
-        return "disease"
-
-    # explicit fields if present
-    for key in ["type", "category", "entityType", "kind", "healthIssueType"]:
-        val = item.get(key)
-        if isinstance(val, str):
-            low = val.lower()
-            if "pest" in low or "insect" in low:
-                return "pest"
-            if "disease" in low or "fung" in low:
-                return "disease"
-
-    return "unknown"
-
-
-def format_dp_item(item: Dict[str, Any], rank: int) -> Dict[str, Any]:
-    species = item.get("species", {}) if isinstance(item.get("species"), dict) else {}
-    return {
-        "rank": rank,
-        "latin_name": first_nonempty_str([
-            item.get("scientificName"),
-            item.get("scientificNameWithoutAuthor"),
-            species.get("scientificNameWithoutAuthor"),
-            item.get("name"),
-            item.get("title"),
-            item.get("label"),
-            "ismeretlen"
-        ]),
-        "hungarian_name": first_nonempty_str([
-            item.get("common_name"),
-            item.get("commonName"),
-            pick_hungarian_name(species)
-        ]),
-        "score": normalize_score(item)
-    }
-
-
-def extract_crop_candidates(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    candidates = []
-
-    # 1) direct cropCandidates / crops
-    for key in ["cropCandidates", "crops", "crop_matches", "cropMatches"]:
-        value = data.get(key)
-        if isinstance(value, list):
-            for idx, item in enumerate(value[:5], start=1):
-                species = item.get("species", {}) if isinstance(item, dict) else {}
-                candidates.append({
-                    "rank": idx,
-                    "latin_name": first_nonempty_str([
-                        item.get("scientificName") if isinstance(item, dict) else None,
-                        item.get("scientificNameWithoutAuthor") if isinstance(item, dict) else None,
-                        species.get("scientificNameWithoutAuthor"),
-                        item.get("name") if isinstance(item, dict) else None,
-                        item.get("label") if isinstance(item, dict) else None,
-                    ]),
-                    "hungarian_name": first_nonempty_str([
-                        item.get("common_name") if isinstance(item, dict) else None,
-                        item.get("commonName") if isinstance(item, dict) else None,
-                        pick_hungarian_name(species)
-                    ]),
-                    "score": normalize_score(item if isinstance(item, dict) else {})
-                })
-            if candidates:
-                return candidates
-
-    # 2) fallback from top-level plant identification result
-    results = data.get("results", [])
-    if isinstance(results, list):
-        for idx, item in enumerate(results[:5], start=1):
-            species = item.get("species", {})
-            latin = first_nonempty_str([
+    for idx, item in enumerate(results[:5], start=1):
+        species = item.get("species", {}) if isinstance(item.get("species"), dict) else {}
+        formatted.append({
+            "rank": idx,
+            "latin_name": first_nonempty_str([
                 item.get("scientificName"),
                 item.get("scientificNameWithoutAuthor"),
-                species.get("scientificNameWithoutAuthor")
-            ])
-            if latin:
-                candidates.append({
-                    "rank": idx,
-                    "latin_name": latin,
-                    "hungarian_name": pick_hungarian_name(species),
-                    "score": normalize_score(item)
-                })
+                species.get("scientificNameWithoutAuthor"),
+                item.get("name"),
+                item.get("label"),
+                "ismeretlen"
+            ]),
+            "hungarian_name": first_nonempty_str([
+                item.get("common_name"),
+                item.get("commonName"),
+                pick_hungarian_name(species)
+            ]),
+            "score": normalize_score(item)
+        })
 
-    return candidates[:5]
+    return formatted
 
 
-def split_disease_pest_results(data: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-    raw_results = data.get("results", [])
-    if not isinstance(raw_results, list):
-        raw_results = []
+def format_disease_pest_list(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    formatted = []
 
-    disease_items = []
-    pest_items = []
+    for idx, item in enumerate(results[:10], start=1):
+        species = item.get("species", {}) if isinstance(item.get("species"), dict) else {}
+        formatted.append({
+            "rank": idx,
+            "latin_name": first_nonempty_str([
+                item.get("scientificName"),
+                item.get("scientificNameWithoutAuthor"),
+                species.get("scientificNameWithoutAuthor"),
+                item.get("name"),
+                item.get("title"),
+                item.get("label"),
+                "ismeretlen"
+            ]),
+            "hungarian_name": first_nonempty_str([
+                item.get("common_name"),
+                item.get("commonName"),
+                pick_hungarian_name(species)
+            ]),
+            "score": normalize_score(item),
+            "raw_type": first_nonempty_str([
+                item.get("type"),
+                item.get("category"),
+                item.get("entityType"),
+                item.get("kind"),
+                item.get("healthIssueType")
+            ]),
+            "raw_item": item
+        })
 
-    for item in raw_results:
-        if not isinstance(item, dict):
-            continue
+    return formatted
 
-        category = classify_dp_result(item)
 
-        if category == "disease":
-            disease_items.append(item)
-        elif category == "pest":
-            pest_items.append(item)
+def extract_crop_candidates(dp_response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    # 1. ha van külön crop mező
+    for key in ["cropCandidates", "crops", "crop_matches", "cropMatches"]:
+        value = dp_response.get(key)
+        if isinstance(value, list) and value:
+            return format_crop_top5(value)
 
-    disease_top5 = [
-        format_dp_item(item, idx)
-        for idx, item in enumerate(disease_items[:5], start=1)
-    ]
+    # 2. fallback: ha a response-ben van növényazonosítás jellegű results
+    results = dp_response.get("results", [])
+    if isinstance(results, list) and results:
+        return format_crop_top5(results)
 
-    pest_top5 = [
-        format_dp_item(item, idx)
-        for idx, item in enumerate(pest_items[:5], start=1)
-    ]
-
-    return {
-        "disease_top5": disease_top5,
-        "pest_top5": pest_top5
-    }
+    return []
 
 
 # =========================
@@ -364,17 +276,22 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
         image_bytes = download_image(download_link)
 
         dp_response = call_plantnet_diseases(image_bytes)
-        split_results = split_disease_pest_results(dp_response)
+
+        raw_results = dp_response.get("results", [])
+        if not isinstance(raw_results, list):
+            raw_results = []
+
         crop_top5 = extract_crop_candidates(dp_response)
+        diseases_and_pests = format_disease_pest_list(raw_results)
 
         return {
             "status": "success",
             "mode": req.caseType,
             "message": "Sikeres betegség/kártevő diagnózis",
-            "disease_top5": split_results["disease_top5"],
-            "pest_top5": split_results["pest_top5"],
             "crop_top5": crop_top5,
-            "raw_count": len(dp_response.get("results", [])) if isinstance(dp_response.get("results", []), list) else 0
+            "diseases_and_pests_top": diseases_and_pests,
+            "raw_count": len(raw_results),
+            "raw_response": dp_response
         }
 
     except Exception as e:
@@ -389,5 +306,5 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
 def root():
     return {
         "status": "ok",
-        "version": "stable-gpt-2-endpoints-v1"
+        "version": "stable-gpt-2-endpoints-v2"
     }
