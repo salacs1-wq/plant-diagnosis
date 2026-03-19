@@ -30,15 +30,15 @@ class DiagnoseRequest(BaseModel):
 # VALIDATION
 # =========================
 def validate_request(req: DiagnoseRequest) -> None:
-    # 🔥 fallback értékek
     if req.project != "k-middle-europe":
-        req.project = "k-middle-europe"
+        raise ValueError("A project mezőnek 'k-middle-europe' értékűnek kell lennie.")
 
     if req.mode != "expert":
-        req.mode = "expert"
+        raise ValueError("A mode mezőnek 'expert' értékűnek kell lennie.")
 
     if req.caseType not in ["weed", "disease", "pest"]:
         raise ValueError("A caseType csak 'weed', 'disease' vagy 'pest' lehet.")
+
 
 # =========================
 # FILE DOWNLOAD
@@ -146,17 +146,9 @@ def pick_hungarian_name(species: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def first_nonempty_str(values: List[Any]) -> Optional[str]:
-    for v in values:
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return None
-
-
 def normalize_score(item: Dict[str, Any]) -> float:
-    raw = item.get("score", item.get("probability", 0))
     try:
-        return round(float(raw), 5)
+        return round(float(item.get("score", 0)) * 100, 1)
     except Exception:
         return 0.0
 
@@ -170,7 +162,7 @@ def format_weed_top5(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "rank": idx,
             "latin_name": species.get("scientificNameWithoutAuthor", "ismeretlen"),
             "hungarian_name": pick_hungarian_name(species),
-            "score": round(item.get("score", 0), 5)
+            "score": normalize_score(item)
         })
 
     return formatted
@@ -180,22 +172,11 @@ def format_crop_top5(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     formatted = []
 
     for idx, item in enumerate(results[:5], start=1):
-        species = item.get("species", {}) if isinstance(item.get("species"), dict) else {}
+        species = item.get("species", {})
         formatted.append({
             "rank": idx,
-            "latin_name": first_nonempty_str([
-                item.get("scientificName"),
-                item.get("scientificNameWithoutAuthor"),
-                species.get("scientificNameWithoutAuthor"),
-                item.get("name"),
-                item.get("label"),
-                "ismeretlen"
-            ]),
-            "hungarian_name": first_nonempty_str([
-                item.get("common_name"),
-                item.get("commonName"),
-                pick_hungarian_name(species)
-            ]),
+            "latin_name": species.get("scientificNameWithoutAuthor", "ismeretlen"),
+            "hungarian_name": pick_hungarian_name(species),
             "score": normalize_score(item)
         })
 
@@ -206,56 +187,15 @@ def format_disease_pest_list(results: List[Dict[str, Any]]) -> List[Dict[str, An
     formatted = []
 
     for idx, item in enumerate(results[:10], start=1):
-        species = item.get("species", {}) if isinstance(item.get("species"), dict) else {}
+        species = item.get("species", {})
         formatted.append({
             "rank": idx,
-            "latin_name": first_nonempty_str([
-                item.get("scientificName"),
-                item.get("scientificNameWithoutAuthor"),
-                species.get("scientificNameWithoutAuthor"),
-                item.get("name"),
-                item.get("title"),
-                item.get("label"),
-                "ismeretlen"
-            ]),
-            "hungarian_name": first_nonempty_str([
-                item.get("common_name"),
-                item.get("commonName"),
-                pick_hungarian_name(species)
-            ]),
-            "score": normalize_score(item),
-            "raw_type": first_nonempty_str([
-                item.get("type"),
-                item.get("category"),
-                item.get("entityType"),
-                item.get("kind"),
-                item.get("healthIssueType")
-            ]),
-            "raw_item": item
+            "latin_name": species.get("scientificNameWithoutAuthor", "ismeretlen"),
+            "hungarian_name": pick_hungarian_name(species),
+            "score": normalize_score(item)
         })
 
     return formatted
-
-
-# =========================
-# BUILD HELPERS
-# =========================
-def build_crop_top5(identify_response: Dict[str, Any]) -> List[Dict[str, Any]]:
-    results = identify_response.get("results")
-
-    if not isinstance(results, list) or not results:
-        return []
-
-    return format_crop_top5(results)
-
-
-def build_dp_list(dp_response: Dict[str, Any]) -> List[Dict[str, Any]]:
-    results = dp_response.get("results")
-
-    if not isinstance(results, list):
-        return []
-
-    return format_disease_pest_list(results)
 
 
 # =========================
@@ -264,10 +204,6 @@ def build_dp_list(dp_response: Dict[str, Any]) -> List[Dict[str, Any]]:
 @app.post("/diagnose")
 async def diagnose(req: DiagnoseRequest):
     try:
-        # 🔥 KŐBE VÉSETT ÉRTÉKEK
-        req.project = "k-middle-europe"
-        req.mode = "expert"
-
         validate_request(req)
 
         if req.caseType != "weed":
@@ -281,98 +217,21 @@ async def diagnose(req: DiagnoseRequest):
         image_bytes = download_image(download_link)
 
         plantnet_response = safe_identify(image_bytes)
-results = plantnet_response.get("results", [])
+        results = plantnet_response.get("results", [])
 
-if isinstance(results, list):
-    results = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
+        top5 = format_weed_top5(results)
 
-top5 = format_weed_top5(results)
-
-top_match = None
-if top5:
-    if top5[0]["score"] > 20:
-        top_match = top5[0]
-
-# ❗ NINCS külön return itt → nem törik el
-
-return {
-    "status": "success",
-    "mode": "weed",
-    "message": "Sikeres gyomdiagnózis" if top_match else "Nincs megbízható gyomazonosítás",
-    "top_match": top_match,
-    "top5": top5,
-    "raw_count": len(results)
-}
-    # 🔴 HA KULTÚRNÖVÉNY → NE HAZUDJ GYOMOT
-    if is_likely_crop(latin):
         return {
             "status": "success",
             "mode": "weed",
-            "message": "Valószínűleg kultúrnövény, nem gyom",
-            "top_match": None,
-            "top5": [],
-            "raw_count": len(results),
-            "is_crop": True
-        }
-
-    # ✅ HA VALÓDI GYOM
-   # 🔥 rendezd score szerint
-if isinstance(results, list):
-    results = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
-
-top5 = format_weed_top5(results)
-
-# 🔥 threshold logika
-if top5 and top5[0]["score"] > 20:
-    top_match = top5[0]
-else:
-    top_match = None
-
-# 🔥 fallback ha semmi értelmes nincs
-if not top_match:
-    return {
-        "status": "success",
-        "mode": "weed",
-        "message": "Nincs megbízható gyomazonosítás",
-        "top_match": {
-            "rank": 1,
-            "latin_name": "Ismeretlen gyom",
-            "hungarian_name": None,
-            "score": 1.0
-        },
-        "top5": top5,
-        "raw_count": len(results)
-    }
-
-# ✅ normál eset
-return {
-    "status": "success",
-    "mode": "weed",
-    "message": "Sikeres gyomdiagnózis",
-    "top_match": top_match,
-    "top5": top5,
-    "raw_count": len(results)
-}
-
-        # 🔥 FALLBACK (EZ HIÁNYZOTT)
-        return {
-            "status": "success",
-            "mode": "weed",
-            "message": "Nincs biztos találat (fallback)",
-            "top_match": {
-                "rank": 1,
-                "latin_name": "Ismeretlen gyom",
-                "hungarian_name": None,
-                "score": 0.01
-            },
-            "top5": [],
-            "raw_count": 0
+            "top_match": top5[0] if top5 else None,
+            "top5": top5
         }
 
     except Exception as e:
         return {
             "status": "error",
-            "mode": req.caseType if hasattr(req, "caseType") else None,
+            "mode": req.caseType,
             "message": str(e)
         }
 
@@ -380,10 +239,6 @@ return {
 @app.post("/diagnose-dp")
 async def diagnose_disease_pest(req: DiagnoseRequest):
     try:
-        # 🔥 KŐBE VÉSETT ÉRTÉKEK
-        req.project = "k-middle-europe"
-        req.mode = "expert"
-
         validate_request(req)
 
         if req.caseType not in ["disease", "pest"]:
@@ -399,30 +254,20 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
         identify_response = safe_identify(image_bytes)
         dp_response = safe_disease(image_bytes)
 
-        crop_top5 = build_crop_top5(identify_response)
-        dp_list = build_dp_list(dp_response)
-
-        flags = {
-            "identify_ok": not identify_response.get("error", False),
-            "dp_ok": not dp_response.get("error", False),
-            "has_crop": len(crop_top5) > 0,
-            "has_dp": len(dp_list) > 0
-        }
+        crop_top5 = format_crop_top5(identify_response.get("results", []))
+        dp_list = format_disease_pest_list(dp_response.get("results", []))
 
         return {
             "status": "success",
             "mode": req.caseType,
-            "message": "Stabil betegség/kártevő diagnózis",
             "crop_top5": crop_top5,
-            "diseases_and_pests_top": dp_list,
-            "context_flags": flags,
-            "raw_count": len(dp_list)
+            "diseases_and_pests_top": dp_list
         }
 
     except Exception as e:
         return {
             "status": "error",
-            "mode": req.caseType if hasattr(req, "caseType") else None,
+            "mode": req.caseType,
             "message": str(e)
         }
 
@@ -431,5 +276,5 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
 def root():
     return {
         "status": "ok",
-        "version": "stable-final-v1"
+        "version": "stable-reset"
     }
