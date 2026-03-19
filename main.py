@@ -219,13 +219,19 @@ async def diagnose(req: DiagnoseRequest):
         plantnet_response = safe_identify(image_bytes)
         results = plantnet_response.get("results", [])
 
-        top5 = format_weed_top5(results)
+       top5 = format_weed_top5(results)
 
-        return {
-            "status": "success",
-            "mode": "weed",
-            "top_match": top5[0] if top5 else None,
-            "top5": top5
+top_match = None
+if top5 and top5[0]["score"] >= 20:
+    top_match = top5[0]
+
+return {
+    "status": "success",
+    "mode": "weed",
+    "message": "Sikeres gyomdiagnózis" if top_match else "Nincs megbízható gyomazonosítás",
+    "top_match": top_match,
+    "top5": top5
+}
         }
 
     except Exception as e:
