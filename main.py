@@ -207,17 +207,15 @@ def format_disease_pest_list(results: List[Dict[str, Any]]) -> List[Dict[str, An
 
 
 def extract_crop_candidates(dp_response: Dict[str, Any]) -> List[Dict[str, Any]]:
-    # 1. ha van külön crop mező
+    # Csak akkor adunk vissza kultúrnövény TOP listát,
+    # ha a PlantNet válaszban VAN külön crop mező.
     for key in ["cropCandidates", "crops", "crop_matches", "cropMatches"]:
         value = dp_response.get(key)
         if isinstance(value, list) and value:
             return format_crop_top5(value)
 
-    # 2. fallback: ha a response-ben van növényazonosítás jellegű results
-    results = dp_response.get("results", [])
-    if isinstance(results, list) and results:
-        return format_crop_top5(results)
-
+    # NINCS fallback a results mezőre,
+    # mert az már a betegségek és kártevők közös listája lehet.
     return []
 
 
@@ -306,5 +304,5 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
 def root():
     return {
         "status": "ok",
-        "version": "stable-gpt-2-endpoints-v2"
+        "version": "stable-gpt-2-endpoints-v3"
     }
