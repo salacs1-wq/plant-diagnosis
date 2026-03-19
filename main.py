@@ -273,13 +273,22 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
         download_link = get_download_link(req.openaiFileIdRefs)
         image_bytes = download_image(download_link)
 
+        # -------- NÖVÉNY AZONOSÍTÁS --------
+        identify_response = call_plantnet_identify(image_bytes)
+
+        # -------- BETEGSÉG / KÁRTEVŐ --------
         dp_response = call_plantnet_diseases(image_bytes)
 
         raw_results = dp_response.get("results", [])
         if not isinstance(raw_results, list):
             raw_results = []
 
-        crop_top5 = extract_crop_candidates(dp_response)
+        # ✅ kultúrnövény az identify válaszból
+        crop_top5 = format_crop_top5(
+            identify_response.get("results", [])
+        )
+
+        # ✅ betegségek + kártevők
         diseases_and_pests = format_disease_pest_list(raw_results)
 
         return {
@@ -288,8 +297,7 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
             "message": "Sikeres betegség/kártevő diagnózis",
             "crop_top5": crop_top5,
             "diseases_and_pests_top": diseases_and_pests,
-            "raw_count": len(raw_results),
-            "raw_response": dp_response
+            "raw_count": len(raw_results)
         }
 
     except Exception as e:
@@ -298,7 +306,6 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
             "mode": req.caseType if hasattr(req, "caseType") else None,
             "message": str(e)
         }
-
 
 @app.get("/")
 def root():
