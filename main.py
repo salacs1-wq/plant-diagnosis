@@ -264,6 +264,10 @@ def build_dp_list(dp_response: Dict[str, Any]) -> List[Dict[str, Any]]:
 @app.post("/diagnose")
 async def diagnose(req: DiagnoseRequest):
     try:
+        # 🔥 KŐBE VÉSETT ÉRTÉKEK
+        req.project = "k-middle-europe"
+        req.mode = "expert"
+
         validate_request(req)
 
         if req.caseType != "weed":
@@ -350,6 +354,10 @@ async def diagnose(req: DiagnoseRequest):
 @app.post("/diagnose-dp")
 async def diagnose_disease_pest(req: DiagnoseRequest):
     try:
+        # 🔥 KŐBE VÉSETT ÉRTÉKEK
+        req.project = "k-middle-europe"
+        req.mode = "expert"
+
         validate_request(req)
 
         if req.caseType not in ["disease", "pest"]:
