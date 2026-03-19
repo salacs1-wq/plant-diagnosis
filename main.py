@@ -74,6 +74,28 @@ def format_top5(results):
 
 
 # =========================
+# SZÁNTÓFÖLDI GYOM SZŰRÉS
+# =========================
+FIELD_WEEDS = [
+    "Poa", "Lolium", "Avena", "Setaria",
+    "Echinochloa", "Digitaria", "Bromus",
+    "Cirsium", "Chenopodium", "Amaranthus",
+    "Capsella", "Stellaria"
+]
+
+def filter_field_weeds(top5):
+    filtered = []
+
+    for item in top5:
+        latin = item["latin"]
+
+        if any(genus in latin for genus in FIELD_WEEDS):
+            filtered.append(item)
+
+    return filtered
+
+
+# =========================
 # ENDPOINT
 # =========================
 @app.post("/analyze-weed")
@@ -85,11 +107,22 @@ async def analyze_weed(req: ImageRequest):
         results = plantnet.get("results", [])
 
         top5 = format_top5(results)
+        filtered = filter_field_weeds(top5)
+
+        # 🔥 ha nincs szántóföldi
+        if not filtered:
+            return {
+                "status": "warning",
+                "mode": "weed",
+                "message": "Nem szántóföldi növény",
+                "top5": top5
+            }
 
         return {
             "status": "success",
             "mode": "weed",
-            "top5": top5
+            "top5": top5,
+            "field_candidates": filtered
         }
 
     except Exception as e:
@@ -105,4 +138,7 @@ async def analyze_weed(req: ImageRequest):
 # =========================
 @app.get("/")
 def root():
-    return {"status": "ok", "version": "v2.4-top5"}
+    return {
+        "status": "ok",
+        "version": "v2.5-filter"
+    }
