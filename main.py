@@ -257,11 +257,16 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
         download_link = get_download_link(req.openaiFileIdRefs)
         image_bytes = download_image(download_link)
 
+        # 🔹 növény azonosítás (ez stabil)
         identify_response = safe_identify(image_bytes)
-        dp_response = safe_disease(image_bytes)
-
         crop_top5 = format_crop_top5(identify_response.get("results", []))
-        dp_list = format_disease_pest_list(dp_response.get("results", []))
+
+        # 🔥 disease/pest TRY-CATCH külön!
+        try:
+            dp_response = safe_disease(image_bytes)
+            dp_list = format_disease_pest_list(dp_response.get("results", []))
+        except Exception:
+            dp_list = []
 
         return {
             "status": "success",
@@ -276,7 +281,6 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
             "mode": req.caseType,
             "message": str(e)
         }
-
 
 @app.get("/")
 def root():
