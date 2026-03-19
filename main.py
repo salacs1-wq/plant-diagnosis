@@ -1,15 +1,11 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI
 from pydantic import BaseModel
 import requests
 import os
-import uuid
 
 app = FastAPI()
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY")
-
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # =========================
@@ -42,85 +38,65 @@ def call_plantnet(image_bytes):
 
 
 def format_top5(results):
-    top5 = []
-
+    out = []
     for r in results[:5]:
         species = r.get("species", {})
-        top5.append({
+        out.append({
             "latin": species.get("scientificNameWithoutAuthor", "ismeretlen"),
             "score": round(r.get("score", 0), 4)
         })
-
-    return top5
-
-
-# =========================
-# CORE LOGIC (EZ A LÉNYEG)
-# =========================
-def build_response(mode, top5):
-    return {
-        "status": "success",
-        "mode": mode,
-        "top1": top5[0] if top5 else None,
-        "top5": top5
-    }
+    return out
 
 
 # =========================
-# ENDPOINTS
+# 1. GYOM VÉGPONT
 # =========================
-
 @app.post("/analyze-weed")
 async def analyze_weed(req: ImageRequest):
     try:
         if not req.image_url.startswith("http"):
-            return {"status": "error", "message": "Csak publikus URL használható"}
+            return {"status": "error", "message": "Csak publikus URL"}
 
         img = download_image(req.image_url)
         plant = call_plantnet(img)
 
         top5 = format_top5(plant.get("results", []))
 
-        return build_response("weed", top5)
+        return {
+            "status": "success",
+            "mode": "weed",
+            "top5": top5
+        }
 
     except Exception as e:
         return {"status": "error", "mode": "weed", "message": str(e)}
 
 
-@app.post("/analyze-disease")
-async def analyze_disease(req: ImageRequest):
+# =========================
+# 2. GENERAL (BETEGSÉG + KÁRTEVŐ)
+# =========================
+@app.post("/analyze-general")
+async def analyze_general(req: ImageRequest):
     try:
         if not req.image_url.startswith("http"):
-            return {"status": "error", "message": "Csak publikus URL használható"}
+            return {"status": "error", "message": "Csak publikus URL"}
 
         img = download_image(req.image_url)
         plant = call_plantnet(img)
 
         top5 = format_top5(plant.get("results", []))
 
-        return build_response("disease", top5)
+        return {
+            "status": "success",
+            "mode": "general",
+            "raw_results": plant.get("results", []),
+            "top5": top5
+        }
 
     except Exception as e:
-        return {"status": "error", "mode": "disease", "message": str(e)}
-
-
-@app.post("/analyze-pest")
-async def analyze_pest(req: ImageRequest):
-    try:
-        if not req.image_url.startswith("http"):
-            return {"status": "error", "message": "Csak publikus URL használható"}
-
-        img = download_image(req.image_url)
-        plant = call_plantnet(img)
-
-        top5 = format_top5(plant.get("results", []))
-
-        return build_response("pest", top5)
-
-    except Exception as e:
-        return {"status": "error", "mode": "pest", "message": str(e)}
+        return {"status": "error", "mode": "general", "message": str(e)}
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "version": "v2.3-stable"}
+    return {"status": "ok", "version": "v2.4-clean"}
