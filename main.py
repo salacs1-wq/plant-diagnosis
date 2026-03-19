@@ -316,17 +316,43 @@ async def diagnose(req: DiagnoseRequest):
         }
 
     # ✅ HA VALÓDI GYOM
-    top5 = format_weed_top5(results)
+   # 🔥 rendezd score szerint
+if isinstance(results, list):
+    results = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
 
+top5 = format_weed_top5(results)
+
+# 🔥 threshold logika
+if top5 and top5[0]["score"] > 20:
+    top_match = top5[0]
+else:
+    top_match = None
+
+# 🔥 fallback ha semmi értelmes nincs
+if not top_match:
     return {
         "status": "success",
         "mode": "weed",
-        "message": "Sikeres gyomdiagnózis",
-        "top_match": top5[0],
+        "message": "Nincs megbízható gyomazonosítás",
+        "top_match": {
+            "rank": 1,
+            "latin_name": "Ismeretlen gyom",
+            "hungarian_name": None,
+            "score": 1.0
+        },
         "top5": top5,
-        "raw_count": len(results),
-        "is_crop": False
+        "raw_count": len(results)
     }
+
+# ✅ normál eset
+return {
+    "status": "success",
+    "mode": "weed",
+    "message": "Sikeres gyomdiagnózis",
+    "top_match": top_match,
+    "top5": top5,
+    "raw_count": len(results)
+}
 
         # 🔥 FALLBACK (EZ HIÁNYZOTT)
         return {
