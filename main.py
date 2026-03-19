@@ -285,16 +285,44 @@ async def diagnose(req: DiagnoseRequest):
 
         # ✅ HA VAN TALÁLAT
         if results:
-            top5 = format_weed_top5(results)
+    species = results[0].get("species", {})
+    latin = species.get("scientificNameWithoutAuthor", "")
 
-            return {
-                "status": "success",
-                "mode": "weed",
-                "message": "Sikeres gyomdiagnózis",
-                "top_match": top5[0],
-                "top5": top5,
-                "raw_count": len(results)
-            }
+    CROP_KEYWORDS = [
+        "brassica", "triticum", "zea", "helianthus",
+        "glycine", "solanum", "beta", "hordeum"
+    ]
+
+    def is_likely_crop(name: str) -> bool:
+        if not name:
+            return False
+        name = name.lower()
+        return any(k in name for k in CROP_KEYWORDS)
+
+    # 🔴 HA KULTÚRNÖVÉNY → NE HAZUDJ GYOMOT
+    if is_likely_crop(latin):
+        return {
+            "status": "success",
+            "mode": "weed",
+            "message": "Valószínűleg kultúrnövény, nem gyom",
+            "top_match": None,
+            "top5": [],
+            "raw_count": len(results),
+            "is_crop": True
+        }
+
+    # ✅ HA VALÓDI GYOM
+    top5 = format_weed_top5(results)
+
+    return {
+        "status": "success",
+        "mode": "weed",
+        "message": "Sikeres gyomdiagnózis",
+        "top_match": top5[0],
+        "top5": top5,
+        "raw_count": len(results),
+        "is_crop": False
+    }
 
         # 🔥 FALLBACK (EZ HIÁNYZOTT)
         return {
