@@ -96,11 +96,20 @@ def filter_field_weeds(top5):
 
 
 # =========================
-# ENDPOINT
+# ENDPOINTS
 # =========================
+
 @app.post("/analyze-weed")
 async def analyze_weed(req: ImageRequest):
     try:
+        # 🔥 URL VALIDÁCIÓ (GPT fix)
+        if not req.image_url.startswith("http"):
+            return {
+                "status": "error",
+                "mode": "weed",
+                "message": "Érvénytelen kép URL. Csak publikus (http/https) link használható."
+            }
+
         img = download_image(req.image_url)
 
         plantnet = call_plantnet(img)
@@ -109,7 +118,6 @@ async def analyze_weed(req: ImageRequest):
         top5 = format_top5(results)
         filtered = filter_field_weeds(top5)
 
-        # 🔥 ha nincs szántóföldi
         if not filtered:
             return {
                 "status": "warning",
@@ -133,6 +141,54 @@ async def analyze_weed(req: ImageRequest):
         }
 
 
+@app.post("/analyze-disease")
+async def analyze_disease(req: ImageRequest):
+    try:
+        if not req.image_url.startswith("http"):
+            return {
+                "status": "error",
+                "mode": "disease",
+                "message": "Érvénytelen kép URL."
+            }
+
+        return {
+            "status": "success",
+            "mode": "disease",
+            "message": "Betegség mód még fejlesztés alatt"
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "mode": "disease",
+            "message": str(e)
+        }
+
+
+@app.post("/analyze-pest")
+async def analyze_pest(req: ImageRequest):
+    try:
+        if not req.image_url.startswith("http"):
+            return {
+                "status": "error",
+                "mode": "pest",
+                "message": "Érvénytelen kép URL."
+            }
+
+        return {
+            "status": "success",
+            "mode": "pest",
+            "message": "Kártevő mód még fejlesztés alatt"
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "mode": "pest",
+            "message": str(e)
+        }
+
+
 # =========================
 # ROOT
 # =========================
@@ -140,5 +196,5 @@ async def analyze_weed(req: ImageRequest):
 def root():
     return {
         "status": "ok",
-        "version": "v2.5-filter"
+        "version": "v2.5-final"
     }
