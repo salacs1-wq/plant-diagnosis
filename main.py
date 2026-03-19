@@ -281,28 +281,28 @@ async def diagnose(req: DiagnoseRequest):
         image_bytes = download_image(download_link)
 
         plantnet_response = safe_identify(image_bytes)
-        results = plantnet_response.get("results", [])
+results = plantnet_response.get("results", [])
 
-        # ✅ SORTOLÁS (nagyon fontos)
-        if isinstance(results, list):
-            results = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
+if isinstance(results, list):
+    results = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
 
-        # ✅ HA VAN TALÁLAT
-        if results:
-    species = results[0].get("species", {})
-    latin = species.get("scientificNameWithoutAuthor", "")
+top5 = format_weed_top5(results)
 
-    CROP_KEYWORDS = [
-        "brassica", "triticum", "zea", "helianthus",
-        "glycine", "solanum", "beta", "hordeum"
-    ]
+top_match = None
+if top5:
+    if top5[0]["score"] > 20:
+        top_match = top5[0]
 
-    def is_likely_crop(name: str) -> bool:
-        if not name:
-            return False
-        name = name.lower()
-        return any(k in name for k in CROP_KEYWORDS)
+# ❗ NINCS külön return itt → nem törik el
 
+return {
+    "status": "success",
+    "mode": "weed",
+    "message": "Sikeres gyomdiagnózis" if top_match else "Nincs megbízható gyomazonosítás",
+    "top_match": top_match,
+    "top5": top5,
+    "raw_count": len(results)
+}
     # 🔴 HA KULTÚRNÖVÉNY → NE HAZUDJ GYOMOT
     if is_likely_crop(latin):
         return {
