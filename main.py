@@ -278,15 +278,37 @@ async def diagnose(req: DiagnoseRequest):
 
         plantnet_response = safe_identify(image_bytes)
         results = plantnet_response.get("results", [])
-        top5 = format_weed_top5(results)
 
+        # ✅ SORTOLÁS (nagyon fontos)
+        if isinstance(results, list):
+            results = sorted(results, key=lambda x: x.get("score", 0), reverse=True)
+
+        # ✅ HA VAN TALÁLAT
+        if results:
+            top5 = format_weed_top5(results)
+
+            return {
+                "status": "success",
+                "mode": "weed",
+                "message": "Sikeres gyomdiagnózis",
+                "top_match": top5[0],
+                "top5": top5,
+                "raw_count": len(results)
+            }
+
+        # 🔥 FALLBACK (EZ HIÁNYZOTT)
         return {
             "status": "success",
             "mode": "weed",
-            "message": "Sikeres gyomdiagnózis",
-            "top_match": top5[0] if top5 else None,
-            "top5": top5,
-            "raw_count": len(results)
+            "message": "Nincs biztos találat (fallback)",
+            "top_match": {
+                "rank": 1,
+                "latin_name": "Ismeretlen gyom",
+                "hungarian_name": None,
+                "score": 0.01
+            },
+            "top5": [],
+            "raw_count": 0
         }
 
     except Exception as e:
