@@ -69,13 +69,8 @@ def call_plantnet_identify(image_bytes: bytes) -> Dict[str, Any]:
     if not PLANTNET_API_KEY:
         raise ValueError("Hiányzik a PLANTNET_API_KEY környezeti változó.")
 
-    url = "https://my-api.plantnet.org/v2/identify"
-    params = {
-        "api-key": PLANTNET_API_KEY,
-        "project": "k-middle-europe",
-        "include-related-images": "false"
-    }
-
+    url = "https://my-api.plantnet.org/v2/identify/all"
+    params = {"api-key": PLANTNET_API_KEY}
     files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
     data = {"organs": "leaf"}
 
@@ -96,7 +91,6 @@ def call_plantnet_diseases(image_bytes: bytes) -> Dict[str, Any]:
 
     url = "https://my-api.plantnet.org/v2/diseases/identify"
     params = {"api-key": PLANTNET_API_KEY}
-
     files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
     data = {"organs": "leaf"}
 
@@ -112,31 +106,6 @@ def call_plantnet_diseases(image_bytes: bytes) -> Dict[str, Any]:
 
 
 # =========================
-# SAFE WRAPPERS
-# =========================
-def safe_identify(image_bytes: bytes) -> Dict[str, Any]:
-    try:
-        return call_plantnet_identify(image_bytes)
-    except Exception as e:
-        return {
-            "error": True,
-            "message": str(e),
-            "results": []
-        }
-
-
-def safe_disease(image_bytes: bytes) -> Dict[str, Any]:
-    try:
-        return call_plantnet_diseases(image_bytes)
-    except Exception as e:
-        return {
-            "error": True,
-            "message": str(e),
-            "results": []
-        }
-
-
-# =========================
 # FORMAT HELPERS
 # =========================
 def pick_hungarian_name(species: Dict[str, Any]) -> Optional[str]:
@@ -146,9 +115,17 @@ def pick_hungarian_name(species: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def first_nonempty_str(values: List[Any]) -> Optional[str]:
+    for v in values:
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
 def normalize_score(item: Dict[str, Any]) -> float:
+    raw = item.get("score", item.get("probability", 0))
     try:
-        return round(float(item.get("score", 0)) * 100, 1)
+        return round(float(raw), 5)
     except Exception:
         return 0.0
 
@@ -162,7 +139,7 @@ def format_weed_top5(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "rank": idx,
             "latin_name": species.get("scientificNameWithoutAuthor", "ismeretlen"),
             "hungarian_name": pick_hungarian_name(species),
-            "score": normalize_score(item)
+            "score": round(item.get("score", 0), 5)
         })
 
     return formatted
@@ -172,11 +149,22 @@ def format_crop_top5(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     formatted = []
 
     for idx, item in enumerate(results[:5], start=1):
-        species = item.get("species", {})
+        species = item.get("species", {}) if isinstance(item.get("species"), dict) else {}
         formatted.append({
             "rank": idx,
-            "latin_name": species.get("scientificNameWithoutAuthor", "ismeretlen"),
-            "hungarian_name": pick_hungarian_name(species),
+            "latin_name": first_nonempty_str([
+                item.get("scientificName"),
+                item.get("scientificNameWithoutAuthor"),
+                species.get("scientificNameWithoutAuthor"),
+                item.get("name"),
+                item.get("label"),
+                "ismeretlen"
+            ]),
+            "hungarian_name": first_nonempty_str([
+                item.get("common_name"),
+                item.get("commonName"),
+                pick_hungarian_name(species)
+            ]),
             "score": normalize_score(item)
         })
 
@@ -187,15 +175,48 @@ def format_disease_pest_list(results: List[Dict[str, Any]]) -> List[Dict[str, An
     formatted = []
 
     for idx, item in enumerate(results[:10], start=1):
-        species = item.get("species", {})
+        species = item.get("species", {}) if isinstance(item.get("species"), dict) else {}
         formatted.append({
             "rank": idx,
-            "latin_name": species.get("scientificNameWithoutAuthor", "ismeretlen"),
-            "hungarian_name": pick_hungarian_name(species),
-            "score": normalize_score(item)
+            "latin_name": first_nonempty_str([
+                item.get("scientificName"),
+                item.get("scientificNameWithoutAuthor"),
+                species.get("scientificNameWithoutAuthor"),
+                item.get("name"),
+                item.get("title"),
+                item.get("label"),
+                "ismeretlen"
+            ]),
+            "hungarian_name": first_nonempty_str([
+                item.get("common_name"),
+                item.get("commonName"),
+                pick_hungarian_name(species)
+            ]),
+            "score": normalize_score(item),
+            "raw_type": first_nonempty_str([
+                item.get("type"),
+                item.get("category"),
+                item.get("entityType"),
+                item.get("kind"),
+                item.get("healthIssueType")
+            ]),
+            "raw_item": item
         })
 
     return formatted
+
+
+def extract_crop_candidates(dp_response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    # Csak akkor adunk vissza kultúrnövény TOP listát,
+    # ha a PlantNet válaszban VAN külön crop mező.
+    for key in ["cropCandidates", "crops", "crop_matches", "cropMatches"]:
+        value = dp_response.get(key)
+        if isinstance(value, list) and value:
+            return format_crop_top5(value)
+
+    # NINCS fallback a results mezőre,
+    # mert az már a betegségek és kártevők közös listája lehet.
+    return []
 
 
 # =========================
@@ -216,28 +237,23 @@ async def diagnose(req: DiagnoseRequest):
         download_link = get_download_link(req.openaiFileIdRefs)
         image_bytes = download_image(download_link)
 
-        plantnet_response = safe_identify(image_bytes)
+        plantnet_response = call_plantnet_identify(image_bytes)
         results = plantnet_response.get("results", [])
+        top5 = format_weed_top5(results)
 
-       top5 = format_weed_top5(results)
-
-top_match = None
-if top5 and top5[0]["score"] >= 20:
-    top_match = top5[0]
-
-return {
-    "status": "success",
-    "mode": "weed",
-    "message": "Sikeres gyomdiagnózis" if top_match else "Nincs megbízható gyomazonosítás",
-    "top_match": top_match,
-    "top5": top5
-}
+        return {
+            "status": "success",
+            "mode": "weed",
+            "message": "Sikeres gyomdiagnózis",
+            "top_match": top5[0] if top5 else None,
+            "top5": top5,
+            "raw_count": len(results)
         }
 
     except Exception as e:
         return {
             "status": "error",
-            "mode": req.caseType,
+            "mode": req.caseType if hasattr(req, "caseType") else None,
             "message": str(e)
         }
 
@@ -257,34 +273,36 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
         download_link = get_download_link(req.openaiFileIdRefs)
         image_bytes = download_image(download_link)
 
-        # 🔹 növény azonosítás (ez stabil)
-        identify_response = safe_identify(image_bytes)
-        crop_top5 = format_crop_top5(identify_response.get("results", []))
+        dp_response = call_plantnet_diseases(image_bytes)
 
-        # 🔥 disease/pest TRY-CATCH külön!
-        try:
-            dp_response = safe_disease(image_bytes)
-            dp_list = format_disease_pest_list(dp_response.get("results", []))
-        except Exception:
-            dp_list = []
+        raw_results = dp_response.get("results", [])
+        if not isinstance(raw_results, list):
+            raw_results = []
+
+        crop_top5 = extract_crop_candidates(dp_response)
+        diseases_and_pests = format_disease_pest_list(raw_results)
 
         return {
             "status": "success",
             "mode": req.caseType,
+            "message": "Sikeres betegség/kártevő diagnózis",
             "crop_top5": crop_top5,
-            "diseases_and_pests_top": dp_list
+            "diseases_and_pests_top": diseases_and_pests,
+            "raw_count": len(raw_results),
+            "raw_response": dp_response
         }
 
     except Exception as e:
         return {
             "status": "error",
-            "mode": req.caseType,
+            "mode": req.caseType if hasattr(req, "caseType") else None,
             "message": str(e)
         }
+
 
 @app.get("/")
 def root():
     return {
         "status": "ok",
-        "version": "stable-reset"
+        "version": "stable-gpt-2-endpoints-v3"
     }
