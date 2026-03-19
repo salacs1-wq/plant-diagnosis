@@ -51,11 +51,16 @@ def download_image(download_link: str) -> bytes:
     return response.content
 
 
-def call_plantnet(image_bytes: bytes) -> Dict[str, Any]:
-    if not PLANTNET_API_KEY:
-        raise ValueError("Hiányzik a PLANTNET_API_KEY környezeti változó.")
+def call_plantnet(image_bytes: bytes):
 
-    url = f"https://my-api.plantnet.org/v2/identify/all?api-key={PLANTNET_API_KEY}"
+    if not PLANTNET_API_KEY:
+        raise ValueError("Hiányzik a PLANTNET_API_KEY")
+
+    url = "https://my-api.plantnet.org/v2/identify/all"
+
+    params = {
+        "api-key": PLANTNET_API_KEY
+    }
 
     files = {
         "images": ("image.jpg", image_bytes, "image/jpeg")
@@ -65,9 +70,17 @@ def call_plantnet(image_bytes: bytes) -> Dict[str, Any]:
         "organs": "leaf"
     }
 
-    response = requests.post(url, files=files, data=data, timeout=60)
-    response.raise_for_status()
-    return response.json()
+    r = requests.post(
+        url,
+        params=params,
+        files=files,
+        data=data,
+        timeout=60
+    )
+
+    r.raise_for_status()
+
+    return r.json()
 
 
 def pick_hungarian_name(species: Dict[str, Any]) -> Optional[str]:
