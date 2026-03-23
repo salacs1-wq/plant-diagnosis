@@ -305,7 +305,10 @@ async def diagnose_weed(req: DiagnoseRequest):
         image_bytes = download_image(download_link)
 
         plantnet = call_plantnet_identify(image_bytes)
-        inat = {}
+        try:
+            inat = call_inat(image_bytes)
+        except Exception as e:
+            inat = {"error": str(e)}
 
         results = plantnet.get("results", [])
         if not isinstance(results, list):
