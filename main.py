@@ -412,3 +412,17 @@ def root():
         "gpt_enabled": True,
         "plantnet_enabled": True
     }
+@app.get("/debug-env")
+def debug_env():
+    import os
+
+    plantnet_key = os.getenv("PLANTNET_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
+
+    return {
+        "plantnet_key_present": bool(plantnet_key),
+        "plantnet_key_length": len(plantnet_key) if plantnet_key else 0,
+        "openai_key_present": bool(openai_key),
+        "openai_key_length": len(openai_key) if openai_key else 0,
+        "openai_key_starts_with_sk": openai_key.startswith("sk-") if openai_key else False
+    }
