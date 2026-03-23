@@ -74,13 +74,7 @@ def call_plantnet_identify(image_bytes: bytes) -> Dict[str, Any]:
     files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
     data = {"organs": "leaf"}
 
-    response = requests.post(
-        url,
-        params=params,
-        files=files,
-        data=data,
-        timeout=60
-    )
+    response = requests.post(url, params=params, files=files, data=data, timeout=60)
     response.raise_for_status()
     return response.json()
 
@@ -94,15 +88,37 @@ def call_plantnet_diseases(image_bytes: bytes) -> Dict[str, Any]:
     files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
     data = {"organs": "leaf"}
 
-    response = requests.post(
-        url,
-        params=params,
-        files=files,
-        data=data,
-        timeout=60
-    )
+    response = requests.post(url, params=params, files=files, data=data, timeout=60)
     response.raise_for_status()
     return response.json()
+
+
+# =========================
+# INAT CALL (ÚJ)
+# =========================
+def call_inat(image_bytes: bytes) -> Dict[str, Any]:
+    url = "https://api.inaturalist.org/v1/computervision/score_image"
+
+    # NÖVÉNY
+    plant_res = requests.post(
+        url,
+        files={"image": ("image.jpg", image_bytes, "image/jpeg")},
+        data={"taxon_id": 47126},  # Plantae
+        timeout=60
+    ).json()
+
+    # ROVAR
+    insect_res = requests.post(
+        url,
+        files={"image": ("image.jpg", image_bytes, "image/jpeg")},
+        data={"taxon_id": 47158},  # Insecta
+        timeout=60
+    ).json()
+
+    return {
+        "plant": plant_res.get("results", [])[:3],
+        "insect": insect_res.get("results", [])[:3]
+    }
 
 
 # =========================
@@ -193,109 +209,40 @@ def format_disease_pest_list(results: List[Dict[str, Any]]) -> List[Dict[str, An
                 pick_hungarian_name(species)
             ]),
             "score": normalize_score(item),
-            "raw_type": first_nonempty_str([
-                item.get("type"),
-                item.get("category"),
-                item.get("entityType"),
-                item.get("kind"),
-                item.get("healthIssueType")
-            ]),
             "raw_item": item
         })
 
     return formatted
 
 
-def extract_crop_candidates(dp_response: Dict[str, Any]) -> List[Dict[str, Any]]:
-    # Csak akkor adunk vissza kultúrnövény TOP listát,
-    # ha a PlantNet válaszban VAN külön crop mező.
-    for key in ["cropCandidates", "crops", "crop_matches", "cropMatches"]:
-        value = dp_response.get(key)
-        if isinstance(value, list) and value:
-            return format_crop_top5(value)
-
-    # NINCS fallback a results mezőre,
-    # mert az már a betegségek és kártevők közös listája lehet.
-    return []
-
-
 # =========================
 # ROUTES
 # =========================
-@app.post("/diagnose")
-async def diagnose(req: DiagnoseRequest):
-    try:
-        validate_request(req)
-
-        if req.caseType != "weed":
-            return {
-                "status": "error",
-                "mode": req.caseType,
-                "message": "A /diagnose végpont csak gyom módhoz használható."
-            }
-
-        download_link = get_download_link(req.openaiFileIdRefs)
-        image_bytes = download_image(download_link)
-
-        plantnet_response = call_plantnet_identify(image_bytes)
-        results = plantnet_response.get("results", [])
-        top5 = format_weed_top5(results)
-
-        return {
-            "status": "success",
-            "mode": "weed",
-            "message": "Sikeres gyomdiagnózis",
-            "top_match": top5[0] if top5 else None,
-            "top5": top5,
-            "raw_count": len(results)
-        }
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "mode": req.caseType if hasattr(req, "caseType") else None,
-            "message": str(e)
-        }
-
-
 @app.post("/diagnose-dp")
 async def diagnose_disease_pest(req: DiagnoseRequest):
     try:
         validate_request(req)
 
-        if req.caseType not in ["disease", "pest"]:
-            return {
-                "status": "error",
-                "mode": req.caseType,
-                "message": "A /diagnose-dp végpont csak betegség vagy kártevő módhoz használható."
-            }
-
         download_link = get_download_link(req.openaiFileIdRefs)
         image_bytes = download_image(download_link)
 
         dp_response = call_plantnet_diseases(image_bytes)
+        inat_response = call_inat(image_bytes)
 
         raw_results = dp_response.get("results", [])
-        if not isinstance(raw_results, list):
-            raw_results = []
-
-        crop_top5 = extract_crop_candidates(dp_response)
         diseases_and_pests = format_disease_pest_list(raw_results)
 
         return {
             "status": "success",
             "mode": req.caseType,
-            "message": "Sikeres betegség/kártevő diagnózis",
-            "crop_top5": crop_top5,
-            "diseases_and_pests_top": diseases_and_pests,
-            "raw_count": len(raw_results),
-            "raw_response": dp_response
+            "plantnet": dp_response,
+            "inat": inat_response,
+            "diseases_and_pests_top": diseases_and_pests
         }
 
     except Exception as e:
         return {
             "status": "error",
-            "mode": req.caseType if hasattr(req, "caseType") else None,
             "message": str(e)
         }
 
@@ -304,5 +251,5 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
 def root():
     return {
         "status": "ok",
-        "version": "stable-gpt-2-endpoints-v3"
+        "version": "inat-integrated-v1"
     }
