@@ -322,7 +322,13 @@ async def diagnose_weed(req: DiagnoseRequest):
             "inat": inat
         }
 
-        gpt_result = call_gpt(gpt_input)
+        if plantnet and "results" in plantnet:
+            gpt_result = call_gpt(gpt_input)
+        else:
+            gpt_result = {
+            "error": "No PlantNet result",
+            "debug": True
+            }
 
         return {
             "status": "success",
