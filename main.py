@@ -69,10 +69,10 @@ def call_plantnet_identify(image_bytes: bytes, project: str) -> Dict[str, Any]:
     if not PLANTNET_API_KEY:
         raise ValueError("Hiányzik a PLANTNET_API_KEY környezeti változó.")
 
-    url = "https://my-api.plantnet.org/v2/identify/all"
+    # A project az URL része: /v2/identify/{project}
+    url = f"https://my-api.plantnet.org/v2/identify/{project}"
     params = {
-        "api-key": PLANTNET_API_KEY,
-        "project": project
+        "api-key": PLANTNET_API_KEY
     }
     files = {
         "images": ("image.jpg", image_bytes, "image/jpeg")
@@ -98,14 +98,13 @@ def call_plantnet_identify(image_bytes: bytes, project: str) -> Dict[str, Any]:
     return response.json()
 
 
-def call_plantnet_diseases(image_bytes: bytes, project: str) -> Dict[str, Any]:
+def call_plantnet_diseases(image_bytes: bytes) -> Dict[str, Any]:
     if not PLANTNET_API_KEY:
         raise ValueError("Hiányzik a PLANTNET_API_KEY környezeti változó.")
 
     url = "https://my-api.plantnet.org/v2/diseases/identify"
     params = {
-        "api-key": PLANTNET_API_KEY,
-        "project": project
+        "api-key": PLANTNET_API_KEY
     }
     files = {
         "images": ("image.jpg", image_bytes, "image/jpeg")
@@ -259,6 +258,7 @@ async def diagnose(req: DiagnoseRequest):
         image_bytes = download_image(download_link)
 
         plantnet_response = call_plantnet_identify(image_bytes, req.project)
+
         raw_results = plantnet_response.get("results", [])
         if not isinstance(raw_results, list):
             raw_results = []
@@ -269,84 +269,4 @@ async def diagnose(req: DiagnoseRequest):
             "status": "success",
             "mode": "weed",
             "process": {
-                "endpoint_used": "/diagnose",
-                "plantnet_called": True,
-                "project_used": req.project
-            },
-            "top_match": top5[0] if top5 else None,
-            "plantnet_top5": top5,
-            "raw_count": len(raw_results),
-            "raw_response": plantnet_response
-        }
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "mode": req.caseType if hasattr(req, "caseType") else None,
-            "message": str(e)
-        }
-
-
-@app.post("/diagnose-dp")
-async def diagnose_disease_pest(req: DiagnoseRequest):
-    try:
-        validate_request(req)
-
-        if req.caseType not in ["disease", "pest"]:
-            return {
-                "status": "error",
-                "mode": req.caseType,
-                "message": "A /diagnose-dp végpont csak betegség vagy kártevő módhoz használható."
-            }
-
-        download_link = get_download_link(req.openaiFileIdRefs)
-        image_bytes = download_image(download_link)
-
-        dp_response = call_plantnet_diseases(image_bytes, req.project)
-
-        raw_results = dp_response.get("results", [])
-        if not isinstance(raw_results, list):
-            raw_results = []
-
-        crop_top5 = extract_crop_candidates(dp_response)
-        diseases_and_pests_top = format_disease_pest_list(raw_results)
-
-        return {
-            "status": "success",
-            "mode": req.caseType,
-            "process": {
-                "endpoint_used": "/diagnose-dp",
-                "plantnet_called": True,
-                "project_used": req.project
-            },
-            "crop_top5": crop_top5,
-            "plantnet_top5": diseases_and_pests_top[:5],
-            "raw_count": len(raw_results),
-            "raw_response": dp_response
-        }
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "mode": req.caseType if hasattr(req, "caseType") else None,
-            "message": str(e)
-        }
-
-
-@app.get("/debug-env")
-def debug_env():
-    plantnet_key = os.getenv("PLANTNET_API_KEY")
-
-    return {
-        "plantnet_key_present": bool(plantnet_key),
-        "plantnet_key_length": len(plantnet_key) if plantnet_key else 0
-    }
-
-
-@app.get("/")
-def root():
-    return {
-        "status": "ok",
-        "version": "plantnet-only-v2-project-fixed",
-        "endpoints": ["/diagnose", "/diagnose-dp", "/debug-env"]
-        }
+                "endpoint_used": "/diagn
