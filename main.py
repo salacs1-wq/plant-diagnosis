@@ -65,14 +65,27 @@ def download_image(download_link: str) -> bytes:
 # =========================
 # PLANTNET CALLS
 # =========================
-def call_plantnet_identify(image_bytes: bytes) -> Dict[str, Any]:
+def call_plantnet_identify(image_bytes: bytes, project: str) -> Dict[str, Any]:
     if not PLANTNET_API_KEY:
         raise ValueError("Hiányzik a PLANTNET_API_KEY környezeti változó.")
 
     url = "https://my-api.plantnet.org/v2/identify/all"
-    params = {"api-key": PLANTNET_API_KEY}
-    files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
-    data = {"organs": "leaf"}
+    params = {
+        "api-key": PLANTNET_API_KEY,
+        "project": project
+    }
+    files = {
+        "images": ("image.jpg", image_bytes, "image/jpeg")
+    }
+    data = {
+        "organs": "leaf"
+    }
+
+    print("=== PLANTNET DEBUG /diagnose ===")
+    print("url:", url)
+    print("params:", params)
+    print("data:", data)
+    print("================================")
 
     response = requests.post(
         url,
@@ -85,14 +98,27 @@ def call_plantnet_identify(image_bytes: bytes) -> Dict[str, Any]:
     return response.json()
 
 
-def call_plantnet_diseases(image_bytes: bytes) -> Dict[str, Any]:
+def call_plantnet_diseases(image_bytes: bytes, project: str) -> Dict[str, Any]:
     if not PLANTNET_API_KEY:
         raise ValueError("Hiányzik a PLANTNET_API_KEY környezeti változó.")
 
     url = "https://my-api.plantnet.org/v2/diseases/identify"
-    params = {"api-key": PLANTNET_API_KEY}
-    files = {"images": ("image.jpg", image_bytes, "image/jpeg")}
-    data = {"organs": "leaf"}
+    params = {
+        "api-key": PLANTNET_API_KEY,
+        "project": project
+    }
+    files = {
+        "images": ("image.jpg", image_bytes, "image/jpeg")
+    }
+    data = {
+        "organs": "leaf"
+    }
+
+    print("=== PLANTNET DEBUG /diagnose-dp ===")
+    print("url:", url)
+    print("params:", params)
+    print("data:", data)
+    print("===================================")
 
     response = requests.post(
         url,
@@ -232,7 +258,7 @@ async def diagnose(req: DiagnoseRequest):
         download_link = get_download_link(req.openaiFileIdRefs)
         image_bytes = download_image(download_link)
 
-        plantnet_response = call_plantnet_identify(image_bytes)
+        plantnet_response = call_plantnet_identify(image_bytes, req.project)
         raw_results = plantnet_response.get("results", [])
         if not isinstance(raw_results, list):
             raw_results = []
@@ -244,7 +270,8 @@ async def diagnose(req: DiagnoseRequest):
             "mode": "weed",
             "process": {
                 "endpoint_used": "/diagnose",
-                "plantnet_called": True
+                "plantnet_called": True,
+                "project_used": req.project
             },
             "top_match": top5[0] if top5 else None,
             "plantnet_top5": top5,
@@ -275,7 +302,7 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
         download_link = get_download_link(req.openaiFileIdRefs)
         image_bytes = download_image(download_link)
 
-        dp_response = call_plantnet_diseases(image_bytes)
+        dp_response = call_plantnet_diseases(image_bytes, req.project)
 
         raw_results = dp_response.get("results", [])
         if not isinstance(raw_results, list):
@@ -289,7 +316,8 @@ async def diagnose_disease_pest(req: DiagnoseRequest):
             "mode": req.caseType,
             "process": {
                 "endpoint_used": "/diagnose-dp",
-                "plantnet_called": True
+                "plantnet_called": True,
+                "project_used": req.project
             },
             "crop_top5": crop_top5,
             "plantnet_top5": diseases_and_pests_top[:5],
@@ -319,6 +347,6 @@ def debug_env():
 def root():
     return {
         "status": "ok",
-        "version": "plantnet-only-v1",
+        "version": "plantnet-only-v2-project-fixed",
         "endpoints": ["/diagnose", "/diagnose-dp", "/debug-env"]
-    }
+        }
