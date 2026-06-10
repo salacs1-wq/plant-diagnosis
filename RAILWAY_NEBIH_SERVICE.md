@@ -31,4 +31,10 @@ After deployment, verify:
 ```
 
 Use `openapi_nebih_sql_only_actions.json` for the separate Custom GPT
-Action after replacing its server URL with the generated service domain.
+Action.
+
+Public domain:
+
+```text
+https://nebih-sql-api-production.up.railway.app
+```
