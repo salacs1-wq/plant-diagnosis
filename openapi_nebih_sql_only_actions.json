@@ -47,6 +47,7 @@
           "NEBIH"
         ],
         "summary": "Search Products",
+        "description": "Search NEBIH products by name or permit metadata. Always send limit, normally 10 or less. If several similarly named products are returned, use the exact product_name or permit_number in the next query.",
         "operationId": "searchNebihProducts",
         "parameters": [
           {
@@ -134,12 +135,13 @@
           {
             "name": "limit",
             "in": "query",
-            "required": false,
+            "required": true,
+            "description": "Maximum records to return. Always provide this value; use 10 or less for ChatGPT Actions.",
             "schema": {
               "type": "integer",
-              "maximum": 200,
+              "maximum": 10,
               "minimum": 1,
-              "default": 50,
+              "default": 10,
               "title": "Limit"
             }
           },
@@ -209,6 +211,7 @@
           "NEBIH"
         ],
         "summary": "Search Usage",
+        "description": "Search authorized use rows, including crop, target and dose. Always send limit, normally 10 or less. For dose questions, send product_name and crop together whenever the crop is known. If the product name is ambiguous, first call searchNebihProducts.",
         "operationId": "searchNebihUsage",
         "parameters": [
           {
@@ -233,6 +236,7 @@
             "name": "product_name",
             "in": "query",
             "required": false,
+            "description": "Product name. Use the exact returned product name when possible, for example Racer or Racer 25 EC.",
             "schema": {
               "anyOf": [
                 {
@@ -281,6 +285,7 @@
             "name": "crop",
             "in": "query",
             "required": false,
+            "description": "Crop name used to narrow dose results, for example napraforgó or burgonya.",
             "schema": {
               "anyOf": [
                 {
@@ -312,12 +317,13 @@
           {
             "name": "limit",
             "in": "query",
-            "required": false,
+            "required": true,
+            "description": "Maximum records to return. Always provide this value; use 10 or less for ChatGPT Actions.",
             "schema": {
               "type": "integer",
-              "maximum": 200,
+              "maximum": 10,
               "minimum": 1,
-              "default": 50,
+              "default": 10,
               "title": "Limit"
             }
           },
