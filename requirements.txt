@@ -2,3 +2,5 @@ fastapi
 uvicorn
 pydantic
 requests
+httpx>=0.27,<1
+pytest>=8,<10
