@@ -3,8 +3,10 @@ from pydantic import BaseModel
 from typing import List, Optional, Any, Dict
 import requests
 import os
+from nebih_api import router as nebih_router
 
 app = FastAPI()
+app.include_router(nebih_router)
 
 PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY")
 
