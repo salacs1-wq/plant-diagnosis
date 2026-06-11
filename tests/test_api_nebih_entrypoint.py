@@ -15,6 +15,9 @@ def test_nebih_entrypoint_exposes_only_expected_api_paths() -> None:
         "/product/{permit_number}",
         "/documents/{permit_number}",
         "/active-substances/search",
+        "/action/products",
+        "/action/usage",
+        "/action/documents",
     }
     assert client.post("/diagnose", json={}).status_code == 404
     assert client.post("/diagnose-dp", json={}).status_code == 404
@@ -24,3 +27,73 @@ def test_nebih_entrypoint_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_action_products_racer() -> None:
+    response = client.get(
+        "/action/products",
+        params={"q": "Racer", "limit": 5},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["count"] == 5
+    assert len(payload["items"]) == 5
+    assert payload["items"][0]["product_name"] == "Racer"
+    assert set(payload["items"][0]) == {
+        "product_name",
+        "permit_number",
+        "crop",
+        "target",
+        "dose",
+        "dose_unit",
+        "bbch",
+        "phi",
+        "source_pdf",
+    }
+
+
+def test_action_usage_racer_sunflower() -> None:
+    response = client.get(
+        "/action/usage",
+        params={
+            "product_name": "Racer",
+            "crop": "napraforgó",
+            "limit": 5,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["count"] == 5
+    assert all(item["crop"] == "napraforgó" for item in payload["items"])
+    assert all(item["dose"] == "2-3" for item in payload["items"])
+    assert all(item["dose_unit"] == "l/ha" for item in payload["items"])
+    assert all(item["source_pdf"] for item in payload["items"])
+
+
+def test_action_documents() -> None:
+    response = client.get(
+        "/action/documents",
+        params={"permit_number": "11831/2002", "limit": 2},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["count"] == 2
+    assert all(item["source_pdf"] for item in payload["items"])
+
+
+def test_action_validation_errors_are_200() -> None:
+    for endpoint in (
+        "/action/products",
+        "/action/products?q=Racer&limit=999",
+        "/action/usage?limit=bad",
+        "/action/documents",
+    ):
+        response = client.get(endpoint)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is False
+        assert payload["items"] == []
+        assert payload["error"]
