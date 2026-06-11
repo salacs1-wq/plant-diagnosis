@@ -6,7 +6,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path as ApiPath, Query
+from fastapi import APIRouter, FastAPI, HTTPException, Path as ApiPath, Query
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -309,3 +309,24 @@ def search_active_substances(
             limit,
             offset,
         )
+
+
+# Imports are intentionally placed after the shared database helpers and SQL
+# routes so the Action modules can reuse them without a circular import.
+from nebih_actions_api import router as actions_router
+from nebih_pesticide_info_api import router as pesticide_info_router
+
+
+app = FastAPI(
+    title="NEBIH SQL API",
+    description="Read-only NEBIH product and permit lookup service.",
+    version="1.0.0",
+)
+app.include_router(router)
+app.include_router(actions_router)
+app.include_router(pesticide_info_router)
+
+
+@app.get("/health", operation_id="nebihHealth")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
