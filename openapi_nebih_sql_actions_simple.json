@@ -159,6 +159,80 @@
         }
       }
     },
+    "/action/dose": {
+      "get": {
+        "summary": "Get pesticide dose and usage",
+        "description": "Use this operation whenever the user asks for pesticide dose, crop, BBCH, PHI, application number or usage information. If crop is missing, return all crops and doses for the product. Do not ask the user for a crop before calling this operation.",
+        "operationId": "getPesticideDose",
+        "parameters": [
+          {
+            "name": "product_name",
+            "in": "query",
+            "required": true,
+            "description": "Pesticide product name mentioned by the user.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "crop",
+            "in": "query",
+            "required": false,
+            "description": "Crop name when supplied by the user. Omit it to return all authorized crops and doses.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of distinct usage records.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result or a handled error. This operation always returns HTTP 200.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ActionItem"
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/action/documents": {
       "get": {
         "summary": "Get NEBIH permit documents",
@@ -254,6 +328,9 @@
           "phi": {
             "type": "string"
           },
+          "max_treatments": {
+            "type": "string"
+          },
           "source_pdf": {
             "type": "string"
           }
@@ -267,6 +344,7 @@
           "dose_unit",
           "bbch",
           "phi",
+          "max_treatments",
           "source_pdf"
         ],
         "additionalProperties": false
