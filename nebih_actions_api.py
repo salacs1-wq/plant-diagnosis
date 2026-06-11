@@ -70,6 +70,7 @@ def action_item(
     dose_unit: Any = None,
     bbch: Any = None,
     phi: Any = None,
+    max_treatments: Any = None,
     source_pdf: Any = None,
 ) -> dict[str, str]:
     return {
@@ -81,6 +82,7 @@ def action_item(
         "dose_unit": text(dose_unit),
         "bbch": text(bbch),
         "phi": text(phi),
+        "max_treatments": text(max_treatments),
         "source_pdf": text(source_pdf),
     }
 
@@ -192,6 +194,108 @@ def usage(
                     dose_unit=row["dose_unit"],
                     bbch=string_range(row["bbch_min"], row["bbch_max"]),
                     phi=phi,
+                    source_pdf=row["source_pdf"],
+                )
+            )
+        return success(items)
+    except Exception as error:
+        return failure(error)
+
+
+@router.get("/dose", operation_id="getPesticideDose")
+def dose(
+    product_name: str | None = Query(default=None),
+    crop: str | None = Query(default=None),
+    limit: str | None = Query(default="10"),
+) -> dict[str, Any]:
+    try:
+        if not product_name or not product_name.strip():
+            raise ValueError("A product_name paraméter kötelező.")
+        page_size = parse_limit(limit, default=10, maximum=20)
+        folded_product = fold_text(product_name.strip())
+        with closing(connect()) as connection:
+            exact_match = connection.execute(
+                "SELECT 1 FROM usage WHERE fold(product_name) = ? LIMIT 1",
+                (folded_product,),
+            ).fetchone()
+            product_clause = (
+                "fold(u.product_name) = ?"
+                if exact_match
+                else "fold(u.product_name) LIKE ?"
+            )
+            parameters: list[Any] = [
+                folded_product if exact_match else f"%{folded_product}%"
+            ]
+            crop_clause = ""
+            if crop and crop.strip():
+                crop_clause = " AND fold(u.crop) LIKE ?"
+                parameters.append(f"%{fold_text(crop.strip())}%")
+            parameters.append(page_size)
+            rows = connection.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT
+                        u.product_name, u.permit_number, u.permit_type,
+                        u.crop, u.target, u.dose_min, u.dose_max,
+                        u.dose_unit, u.all_doses_raw,
+                        u.bbch_min, u.bbch_max, u.phi_days, u.phi_raw,
+                        u.max_treatments,
+                        COALESCE(
+                            (
+                                SELECT d.document_url
+                                FROM document_links AS d
+                                WHERE d.permit_number = u.permit_number
+                                ORDER BY
+                                    d.is_latest_document DESC,
+                                    d.document_order DESC,
+                                    d.id DESC
+                                LIMIT 1
+                            ),
+                            ''
+                        ) AS source_pdf,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY
+                                fold(u.product_name), fold(u.crop),
+                                fold(u.target), u.dose_min, u.dose_max,
+                                fold(u.dose_unit), fold(u.all_doses_raw),
+                                fold(u.bbch_min), fold(u.bbch_max),
+                                fold(u.phi_days), fold(u.phi_raw),
+                                fold(u.max_treatments)
+                            ORDER BY
+                                CASE
+                                    WHEN fold(u.permit_type) = 'alapengedely'
+                                    THEN 0 ELSE 1
+                                END,
+                                u.permit_number, u.id
+                        ) AS usage_rank
+                    FROM usage AS u
+                    WHERE {product_clause}{crop_clause}
+                )
+                SELECT *
+                FROM ranked
+                WHERE usage_rank = 1
+                ORDER BY fold(crop), fold(target), permit_number
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        items = []
+        for row in rows:
+            dose_value = text(row["all_doses_raw"]).strip() or range_text(
+                row["dose_min"], row["dose_max"]
+            )
+            phi = text(row["phi_raw"]).strip() or text(row["phi_days"]).strip()
+            items.append(
+                action_item(
+                    product_name=row["product_name"],
+                    permit_number=row["permit_number"],
+                    crop=row["crop"],
+                    target=row["target"],
+                    dose=dose_value,
+                    dose_unit=row["dose_unit"],
+                    bbch=string_range(row["bbch_min"], row["bbch_max"]),
+                    phi=phi,
+                    max_treatments=row["max_treatments"],
                     source_pdf=row["source_pdf"],
                 )
             )
