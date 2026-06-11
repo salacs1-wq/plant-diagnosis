@@ -1,0 +1,276 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "NEBIH SQL Actions API",
+    "description": "Simplified read-only endpoints for ChatGPT Actions.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://nebih-sql-api-production.up.railway.app"
+    }
+  ],
+  "paths": {
+    "/action/products": {
+      "get": {
+        "summary": "Search NEBIH products",
+        "description": "Find products before requesting usage or dose information.",
+        "operationId": "actionSearchNebihProducts",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Product name or name fragment.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
+              "default": 5
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result or a handled error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ActionItem"
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/action/usage": {
+      "get": {
+        "summary": "Search NEBIH usage and doses",
+        "description": "Find authorized crop, target, dose, BBCH, PHI and source document information.",
+        "operationId": "actionSearchNebihUsage",
+        "parameters": [
+          {
+            "name": "product_name",
+            "in": "query",
+            "required": true,
+            "description": "Product name, preferably selected from actionSearchNebihProducts.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "crop",
+            "in": "query",
+            "required": false,
+            "description": "Crop name, for example napraforgó.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": false,
+            "description": "Target pest, disease, weed or purpose.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
+              "default": 5
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result or a handled error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ActionItem"
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/action/documents": {
+      "get": {
+        "summary": "Get NEBIH permit documents",
+        "description": "Return source PDF links for a permit number.",
+        "operationId": "actionGetNebihDocuments",
+        "parameters": [
+          {
+            "name": "permit_number",
+            "in": "query",
+            "required": true,
+            "description": "Permit number, including slashes.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of documents.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful result or a handled error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ActionItem"
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActionItem": {
+        "type": "object",
+        "properties": {
+          "product_name": {
+            "type": "string"
+          },
+          "permit_number": {
+            "type": "string"
+          },
+          "crop": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "dose": {
+            "type": "string"
+          },
+          "dose_unit": {
+            "type": "string"
+          },
+          "bbch": {
+            "type": "string"
+          },
+          "phi": {
+            "type": "string"
+          },
+          "source_pdf": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "product_name",
+          "permit_number",
+          "crop",
+          "target",
+          "dose",
+          "dose_unit",
+          "bbch",
+          "phi",
+          "source_pdf"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

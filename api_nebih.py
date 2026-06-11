@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from nebih_actions_api import router as actions_router
 from nebih_api import router as nebih_router
 
 
@@ -9,6 +10,7 @@ app = FastAPI(
     version="1.0.0",
 )
 app.include_router(nebih_router)
+app.include_router(actions_router)
 
 
 @app.get("/health", operation_id="nebihHealth")
