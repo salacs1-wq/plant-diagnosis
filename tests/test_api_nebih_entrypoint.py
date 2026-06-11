@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from api_nebih import app
+from nebih_api import app
 
 
 client = TestClient(app)
@@ -19,6 +19,7 @@ def test_nebih_entrypoint_exposes_only_expected_api_paths() -> None:
         "/action/usage",
         "/action/dose",
         "/action/documents",
+        "/action/pesticide-info",
     }
     assert client.post("/diagnose", json={}).status_code == 404
     assert client.post("/diagnose-dp", json={}).status_code == 404
@@ -28,6 +29,11 @@ def test_nebih_entrypoint_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_nebih_entrypoint_docs() -> None:
+    response = client.get("/docs")
+    assert response.status_code == 200
 
 
 def test_action_products_racer() -> None:
@@ -177,3 +183,106 @@ def test_action_validation_errors_are_200() -> None:
         assert payload["ok"] is False
         assert payload["items"] == []
         assert payload["error"]
+
+
+def test_pesticide_info_product_includes_related_data() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"product_name": "Racer", "limit": 20},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["products"]
+    assert payload["active_substances"]
+    assert payload["usages"]
+    assert payload["documents"]
+    assert {"Racer", "Racer 25 EC", "Racer 250 EC"} <= {
+        item["product_name"] for item in payload["usages"]
+    }
+
+
+def test_pesticide_info_active_substance_returns_products_and_usages() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"active_substance": "azoxistrobin", "limit": 20},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["products"]
+    assert payload["usages"]
+    assert any(
+        "azoxistrobin" in item["active_substance_name"].lower()
+        for item in payload["active_substances"]
+    )
+
+
+def test_pesticide_info_crop_target_and_purpose() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "crop": "kukorica",
+            "target": "magrol kelo egysziku gyomok",
+            "purpose": "gyomirto",
+            "limit": 20,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["usages"]
+    assert all("kukorica" in item["crop"].lower() for item in payload["usages"])
+    assert all("gyom" in item["target"].lower() for item in payload["usages"])
+
+
+def test_pesticide_info_bbch_filter() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "crop": "kukorica",
+            "bbch": 16,
+            "purpose": "gyomirto",
+            "limit": 20,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["usages"]
+    assert all(item["bbch_match"] == "match" for item in payload["usages"])
+
+
+def test_pesticide_info_permission_filter() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "crop": "kukorica",
+            "purpose": "gyomirto",
+            "akg_allowed": "true",
+            "limit": 20,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["products"]
+    assert all(item["akg_allowed"] is True for item in payload["products"])
+
+
+def test_pesticide_info_missing_search_terms_is_200() -> None:
+    response = client.get("/action/pesticide-info")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is False
+    assert payload["products"] == []
+    assert payload["active_substances"] == []
+    assert payload["usages"] == []
+    assert payload["documents"] == []
+    assert payload["error"]

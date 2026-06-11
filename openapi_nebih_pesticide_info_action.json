@@ -1,0 +1,307 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "NEBIH Pesticide Information Action",
+    "description": "Read-only pesticide authorization and usage search for the Hungarian NEBIH database.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://nebih-sql-api-production.up.railway.app"
+    }
+  ],
+  "paths": {
+    "/action/pesticide-info": {
+      "get": {
+        "operationId": "getPesticideInformation",
+        "summary": "Search pesticide products, usages, active substances and documents",
+        "description": "Use for every pesticide query: dose, crop, pest, disease, weed, active substance, BBCH, PHI, restrictions, uses, documents or recommendations. Supply all known search details. If crop is omitted, search every crop for the product.",
+        "parameters": [
+          {
+            "name": "product_name",
+            "in": "query",
+            "required": false,
+            "description": "Product name or partial product name, for example Racer or Amistar.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "active_substance",
+            "in": "query",
+            "required": false,
+            "description": "Active substance name or partial name, for example azoxistrobin.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "crop",
+            "in": "query",
+            "required": false,
+            "description": "Crop name, for example kukorica, napraforgo or burgonya.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": false,
+            "description": "Target pest, disease, weed or target category.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pest_or_disease",
+            "in": "query",
+            "required": false,
+            "description": "Alias for target when the user names a pest or disease.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "weed",
+            "in": "query",
+            "required": false,
+            "description": "Alias for target when the user names a weed.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "purpose",
+            "in": "query",
+            "required": false,
+            "description": "Pesticide purpose.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "gyomirtó",
+                "gombaölő",
+                "rovarölő",
+                "talajfertőtlenítő",
+                "növekedésszabályozó"
+              ]
+            }
+          },
+          {
+            "name": "bbch",
+            "in": "query",
+            "required": false,
+            "description": "Requested BBCH growth stage, for example 16.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phi_days",
+            "in": "query",
+            "required": false,
+            "description": "Requested pre-harvest interval in days.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "akg_allowed",
+            "in": "query",
+            "required": false,
+            "description": "Filter by AKG permission.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "aop1_bee_allowed",
+            "in": "query",
+            "required": false,
+            "description": "Filter by AOP1 bee-related permission.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "organic_allowed",
+            "in": "query",
+            "required": false,
+            "description": "Filter by organic farming permission.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "question_type",
+            "in": "query",
+            "required": false,
+            "description": "The main information requested by the user.",
+            "schema": {
+              "type": "string",
+              "default": "general",
+              "enum": [
+                "dose",
+                "product",
+                "active_substance",
+                "usage",
+                "phi",
+                "documents",
+                "recommendation",
+                "general"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of records returned in each result group.",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful search or a handled no-result/error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "query": {
+                      "type": "object",
+                      "properties": {
+                        "product_name": {"type": "string"},
+                        "active_substance": {"type": "string"},
+                        "crop": {"type": "string"},
+                        "target": {"type": "string"},
+                        "pest_or_disease": {"type": "string"},
+                        "weed": {"type": "string"},
+                        "purpose": {"type": "string"},
+                        "bbch": {"type": "string"},
+                        "phi_days": {"type": "string"},
+                        "akg_allowed": {"type": "string"},
+                        "aop1_bee_allowed": {"type": "string"},
+                        "organic_allowed": {"type": "string"},
+                        "question_type": {"type": "string"}
+                      },
+                      "additionalProperties": false
+                    },
+                    "products": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "product_name": {"type": "string"},
+                          "permit_number": {"type": "string"},
+                          "permit_type": {"type": "string"},
+                          "purpose": {"type": "string"},
+                          "formulation": {"type": "string"},
+                          "issue_date": {"type": "string"},
+                          "expiry_date": {"type": "string"},
+                          "akg_allowed": {"type": "boolean"},
+                          "aop1_bee_allowed": {"type": "boolean"},
+                          "organic_allowed": {"type": "boolean"},
+                          "bee_risk": {"type": "string"},
+                          "source_pdf": {"type": "string"}
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "active_substances": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "product_name": {"type": "string"},
+                          "permit_number": {"type": "string"},
+                          "active_substance_name": {"type": "string"},
+                          "content": {"type": "string"},
+                          "unit": {"type": "string"}
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "usages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "product_name": {"type": "string"},
+                          "permit_number": {"type": "string"},
+                          "permit_type": {"type": "string"},
+                          "crop": {"type": "string"},
+                          "target": {"type": "string"},
+                          "purpose": {"type": "string"},
+                          "dose": {"type": "string"},
+                          "dose_unit": {"type": "string"},
+                          "bbch": {"type": "string"},
+                          "bbch_match": {"type": "string"},
+                          "treatment_time": {"type": "string"},
+                          "phi": {"type": "string"},
+                          "max_treatments": {"type": "string"},
+                          "min_interval_days": {"type": "string"},
+                          "source_pdf": {"type": "string"}
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "product_name": {"type": "string"},
+                          "permit_number": {"type": "string"},
+                          "document_title": {"type": "string"},
+                          "document_url": {"type": "string"},
+                          "document_date": {"type": "string"},
+                          "document_type": {"type": "string"},
+                          "is_latest_document": {"type": "boolean"}
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "product_count": {"type": "integer"},
+                        "usage_count": {"type": "integer"},
+                        "active_substance_count": {"type": "integer"},
+                        "document_count": {"type": "integer"},
+                        "note": {"type": "string"}
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "query",
+                    "products",
+                    "active_substances",
+                    "usages",
+                    "documents",
+                    "summary"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

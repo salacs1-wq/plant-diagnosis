@@ -1,18 +1,3 @@
-from fastapi import FastAPI
+"""Backward-compatible import; Railway starts the app from nebih_api:app."""
 
-from nebih_actions_api import router as actions_router
-from nebih_api import router as nebih_router
-
-
-app = FastAPI(
-    title="NEBIH SQL API",
-    description="Read-only NEBIH product and permit lookup service.",
-    version="1.0.0",
-)
-app.include_router(nebih_router)
-app.include_router(actions_router)
-
-
-@app.get("/health", operation_id="nebihHealth")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+from nebih_api import app
