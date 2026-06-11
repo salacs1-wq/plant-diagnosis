@@ -162,7 +162,7 @@
     "/action/dose": {
       "get": {
         "summary": "Get pesticide dose and usage",
-        "description": "Use this operation whenever the user asks for pesticide dose, crop, BBCH, PHI, application number or usage information. If crop is missing, return all crops and doses for the product. Do not ask the user for a crop before calling this operation.",
+        "description": "Use this operation whenever the user asks for pesticide dose, crop, BBCH, PHI, application number or usage information. The operation resolves partial and accent-insensitive product names and returns all matching product variants. If crop is missing, return all crops and doses. Do not ask the user for a crop or a more exact product name before calling this operation.",
         "operationId": "getPesticideDose",
         "parameters": [
           {

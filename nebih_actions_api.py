@@ -214,18 +214,49 @@ def dose(
         page_size = parse_limit(limit, default=10, maximum=20)
         folded_product = fold_text(product_name.strip())
         with closing(connect()) as connection:
-            exact_match = connection.execute(
+            exact_usage = connection.execute(
                 "SELECT 1 FROM usage WHERE fold(product_name) = ? LIMIT 1",
                 (folded_product,),
             ).fetchone()
-            product_clause = (
-                "fold(u.product_name) = ?"
-                if exact_match
-                else "fold(u.product_name) LIKE ?"
+            matched_products = connection.execute(
+                """
+                SELECT DISTINCT product_name
+                FROM permit_index
+                WHERE fold(product_name) LIKE ?
+                ORDER BY
+                    CASE WHEN fold(product_name) = ? THEN 0 ELSE 1 END,
+                    fold(product_name)
+                """,
+                (f"%{folded_product}%", folded_product),
+            ).fetchall()
+            resolved_names = {
+                fold_text(row["product_name"]) for row in matched_products
+            }
+            if exact_usage:
+                resolved_names.add(folded_product)
+            if not resolved_names:
+                usage_names = connection.execute(
+                    """
+                    SELECT DISTINCT product_name
+                    FROM usage
+                    WHERE fold(product_name) LIKE ?
+                    ORDER BY fold(product_name)
+                    """,
+                    (f"%{folded_product}%",),
+                ).fetchall()
+                resolved_names.update(
+                    fold_text(row["product_name"]) for row in usage_names
+                )
+            if not resolved_names:
+                return failure(
+                    f"Nem található termék vagy felhasználás: {product_name.strip()}"
+                )
+            ordered_names = sorted(
+                resolved_names,
+                key=lambda name: (name != folded_product, name),
             )
-            parameters: list[Any] = [
-                folded_product if exact_match else f"%{folded_product}%"
-            ]
+            placeholders = ", ".join("?" for _ in ordered_names)
+            parameters: list[Any] = list(ordered_names)
             crop_clause = ""
             if crop and crop.strip():
                 crop_clause = " AND fold(u.crop) LIKE ?"
@@ -269,7 +300,7 @@ def dose(
                                 u.permit_number, u.id
                         ) AS usage_rank
                     FROM usage AS u
-                    WHERE {product_clause}{crop_clause}
+                    WHERE fold(u.product_name) IN ({placeholders}){crop_clause}
                 )
                 SELECT *
                 FROM ranked
