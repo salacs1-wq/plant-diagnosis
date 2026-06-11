@@ -89,17 +89,22 @@ def test_action_documents() -> None:
 def test_action_dose_racer_without_crop_returns_distinct_crops() -> None:
     response = client.get(
         "/action/dose",
-        params={"product_name": "Racer", "limit": 10},
+        params={"product_name": "Racer", "limit": 20},
     )
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["count"] == 4
+    assert payload["count"] == 12
     assert {item["crop"] for item in payload["items"]} == {
         "burgonya",
         "kapor",
         "napraforgó",
         "sárgarépa, petrezselyem",
+    }
+    assert {item["product_name"] for item in payload["items"]} == {
+        "Racer",
+        "Racer 25 EC",
+        "Racer 250 EC",
     }
 
 
@@ -115,15 +120,47 @@ def test_action_dose_racer_sunflower() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["count"] == 1
-    item = payload["items"][0]
-    assert item["product_name"] == "Racer"
-    assert item["crop"] == "napraforgó"
-    assert item["dose"] == "2-3"
-    assert item["dose_unit"] == "l/ha"
-    assert item["bbch"] == "0-8"
-    assert "max_treatments" in item
-    assert item["source_pdf"]
+    assert payload["count"] == 3
+    assert {item["product_name"] for item in payload["items"]} == {
+        "Racer",
+        "Racer 25 EC",
+        "Racer 250 EC",
+    }
+    for item in payload["items"]:
+        assert item["crop"] == "napraforgó"
+        assert item["dose"] == "2-3"
+        assert item["dose_unit"] == "l/ha"
+        assert item["bbch"] == "0-8"
+        assert "max_treatments" in item
+        assert item["source_pdf"]
+
+
+def test_action_dose_product_fallback_is_accent_insensitive() -> None:
+    response = client.get(
+        "/action/dose",
+        params={"product_name": "Rácér", "limit": 20},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["count"] == 12
+    assert {item["product_name"] for item in payload["items"]} == {
+        "Racer",
+        "Racer 25 EC",
+        "Racer 250 EC",
+    }
+
+
+def test_action_dose_unknown_product_is_handled() -> None:
+    response = client.get(
+        "/action/dose",
+        params={"product_name": "Biztosan nem létező készítmény", "limit": 20},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["items"] == []
+    assert payload["error"]
 
 
 def test_action_validation_errors_are_200() -> None:
