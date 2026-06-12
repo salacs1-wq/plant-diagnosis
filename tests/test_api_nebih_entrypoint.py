@@ -314,7 +314,17 @@ def test_pesticide_info_bayer_maize() -> None:
     assert response.status_code == 200
     assert payload["ok"] is True
     assert payload["usages"]
-    assert all("bayer" in item["owner"].lower() for item in payload["usages"])
+    assert all(
+        "bayer"
+        in " ".join(
+            (
+                item["owner"],
+                item["manufacturer"],
+                item["representative"],
+            )
+        ).lower()
+        for item in payload["usages"]
+    )
     assert all("kukorica" in item["crop"].lower() for item in payload["usages"])
 
 
@@ -332,7 +342,17 @@ def test_pesticide_info_syngenta_rape_insecticide() -> None:
     assert response.status_code == 200
     assert payload["ok"] is True
     assert payload["usages"]
-    assert all("syngenta" in item["owner"].lower() for item in payload["usages"])
+    assert all(
+        "syngenta"
+        in " ".join(
+            (
+                item["owner"],
+                item["manufacturer"],
+                item["representative"],
+            )
+        ).lower()
+        for item in payload["usages"]
+    )
     assert all("repce" in item["crop"].lower() for item in payload["usages"])
     assert all("rovar" in item["purpose"].lower() for item in payload["usages"])
 
@@ -370,7 +390,7 @@ def test_pesticide_info_sunflower_ragweed_category_fallback() -> None:
 def test_pesticide_info_company_fields_are_explicit() -> None:
     response = client.get(
         "/action/pesticide-info",
-        params={"company": "Bayer", "crop": "kukorica", "limit": 1},
+        params={"product_name": "Adengo", "limit": 1},
     )
     payload = response.json()
     usage = payload["usages"][0]
@@ -382,3 +402,37 @@ def test_pesticide_info_company_fields_are_explicit() -> None:
         "expiry_date",
         "latest_document",
     } <= set(usage)
+    assert "Bayer" in usage["manufacturer"]
+    assert "Bayer Hung" in usage["representative"]
+
+
+def test_pesticide_info_manufacturer_filter() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"manufacturer": "Sharda Cropchem", "limit": 5},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["usages"]
+    assert all(
+        "sharda cropchem" in item["manufacturer"].lower()
+        for item in payload["usages"]
+    )
+
+
+def test_pesticide_info_representative_filter() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"representative": "Syngenta Kft", "limit": 5},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["usages"]
+    assert all(
+        "syngenta kft" in item["representative"].lower()
+        for item in payload["usages"]
+    )
