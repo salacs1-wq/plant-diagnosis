@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "NEBIH Pesticide Information Action",
-    "description": "Read-only pesticide authorization and usage search for the Hungarian NEBIH database.",
+    "description": "Authoritative Hungarian pesticide database. The GPT must use this API instead of answering pesticide questions from memory.",
     "version": "1.0.0"
   },
   "servers": [
@@ -14,8 +14,8 @@
     "/action/pesticide-info": {
       "get": {
         "operationId": "getPesticideInformation",
-        "summary": "Search pesticide products, usages, active substances and documents",
-        "description": "Use for every pesticide query: product, company, owner, manufacturer, representative, dose, crop, target, active substance, BBCH, PHI, restrictions, uses or documents. Supply every known search detail.",
+        "summary": "Always look up pesticide information in NEBIH",
+        "description": "MUST call before answering any pesticide question about products, doses, crops, pests, weeds, diseases, active substances, companies, BBCH, PHI, AKG, AOP, permits or documents. Never answer from memory. Pass every detail stated by the user; do not require a crop.",
         "parameters": [
           {
             "name": "product_name",
