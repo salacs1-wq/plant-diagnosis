@@ -299,9 +299,54 @@ def test_pesticide_info_corteva_apple() -> None:
     assert payload["ok"] is True
     assert payload["usages"]
     assert all("corteva" in item["owner"].lower() for item in payload["usages"])
-    assert all(
-        item["crop"].lower().startswith("alma") for item in payload["usages"]
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Fontelis 20 SC",
+        "Laser",
+        "Laser Duplo (er.név: Spin Tor)",
+    }
+    assert not any(
+        item["product_name"] == "Closer 120 SC" for item in payload["usages"]
     )
+
+
+def test_pesticide_info_corteva_pome_fruit_alias() -> None:
+    for crop in ("almatermésűek", "almástermésűek"):
+        response = client.get(
+            "/action/pesticide-info",
+            params={"company": "Corteva", "crop": crop},
+        )
+        payload = response.json()
+
+        assert response.status_code == 200
+        assert payload["ok"] is True
+        assert {item["product_name"] for item in payload["usages"]} == {
+            "Fontelis 20 SC",
+            "Laser",
+            "Laser Duplo (er.név: Spin Tor)",
+        }
+
+
+def test_pesticide_info_laser_apple_usage_is_restored() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"product_name": "Laser", "crop": "alma"},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    apple_usages = {
+        item["product_name"]: item
+        for item in payload["usages"]
+        if crop_matches_for_test(item["crop"], "alma")
+    }
+    assert apple_usages["Laser"]["dose"] == "0.5"
+    assert apple_usages["Laser Duplo (er.név: Spin Tor)"]["dose"] == "0.25"
+
+
+def crop_matches_for_test(crop: str, search: str) -> bool:
+    normalized = crop.casefold()
+    return search in normalized or "almatermésű" in normalized
 
 
 def test_pesticide_info_bayer_maize() -> None:

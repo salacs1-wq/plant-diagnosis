@@ -14,6 +14,7 @@ from nebih_actions_api import parse_limit, range_text, string_range, text
 router = APIRouter(prefix="/action", tags=["NEBIH Pesticide Information"])
 
 COMPANY_METADATA_PATH = Path(__file__).resolve().parent / "nebih_company_metadata.csv"
+USAGE_SUPPLEMENT_PATH = Path(__file__).resolve().parent / "nebih_usage_supplement.csv"
 PERMIT_KEY = "replace(replace(trim({column}), ' ', ''), '.', '/')"
 TARGET_CATEGORY_ALIASES = {
     "parlagfu": ["ketsziku", "gyom"],
@@ -43,6 +44,14 @@ def company_value(product_name: Any, permit_number: Any, field: str) -> str:
     product = fold_text(query_value(product_name))
     permit = normalize_permit_number(query_value(permit_number))
     return company_metadata().get((product, permit), {}).get(field, "")
+
+
+@lru_cache(maxsize=1)
+def usage_supplements() -> list[dict[str, str]]:
+    if not USAGE_SUPPLEMENT_PATH.is_file():
+        return []
+    with USAGE_SUPPLEMENT_PATH.open(encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
 def register_company_functions(connection: Any) -> None:
@@ -125,6 +134,12 @@ def crop_matches(value: Any, search: str) -> bool:
     term = fold_text(search)
     if not crop or not term:
         return False
+    apple_terms = {"alma", "almatermesu", "almatermesuek", "almastermesu", "almastermesuek"}
+    if term in apple_terms:
+        return bool(
+            re.search(r"(?<![a-z0-9(])alma(?![a-z0-9])", crop)
+            or re.search(r"(?<![a-z0-9])almatermesu", crop)
+        )
     if crop == term or crop.startswith(term):
         return True
     return bool(
@@ -133,6 +148,97 @@ def crop_matches(value: Any, search: str) -> bool:
             crop,
         )
     )
+
+
+def supplement_usage_item(row: dict[str, str], bbch_query: int | None) -> dict[str, str]:
+    bbch_min = numeric_bbch(row["bbch_min"])
+    bbch_max = numeric_bbch(row["bbch_max"])
+    bbch_match = ""
+    if bbch_query is not None:
+        low = bbch_min if bbch_min is not None else bbch_max
+        high = bbch_max if bbch_max is not None else bbch_min
+        bbch_match = (
+            "uncertain"
+            if low is None or high is None
+            else "match" if low <= bbch_query <= high else "no_match"
+        )
+    return {
+        "product_name": row["product_name"],
+        "permit_number": row["permit_number"],
+        "permit_type": row["permit_type"],
+        "owner": company_value(row["product_name"], row["permit_number"], "owner"),
+        "manufacturer": company_value(
+            row["product_name"], row["permit_number"], "manufacturer"
+        ),
+        "representative": company_value(
+            row["product_name"], row["permit_number"], "representative"
+        ),
+        "crop": row["crop"],
+        "target": row["target"],
+        "purpose": row["purpose"],
+        "dose": row["dose"],
+        "dose_unit": row["dose_unit"],
+        "bbch": string_range(row["bbch_min"], row["bbch_max"]),
+        "bbch_match": bbch_match,
+        "treatment_time": row["treatment_time"],
+        "phi": row["phi"],
+        "max_treatments": row["max_treatments"],
+        "min_interval_days": row["min_interval_days"],
+        "expiry_date": row["expiry_date"],
+        "latest_document": row["latest_document"],
+        "source_pdf": row["source_pdf"],
+    }
+
+
+def supplement_matches(
+    row: dict[str, str],
+    query: dict[str, str],
+    target_terms: list[str],
+    bbch_number: int | None,
+) -> bool:
+    if query["active_substance"]:
+        return False
+    if any(
+        query[field]
+        for field in (
+            "phi_days",
+            "akg_allowed",
+            "aop1_bee_allowed",
+            "organic_allowed",
+        )
+    ):
+        return False
+    if query["product_name"] and fold_text(query["product_name"]) not in fold_text(
+        row["product_name"]
+    ):
+        return False
+    if query["crop"] and not crop_matches(row["crop"], query["crop"]):
+        return False
+    if target_terms and not all(
+        fold_text(term) in fold_text(row["target"]) for term in target_terms
+    ):
+        return False
+    if query["purpose"] and fold_text(query["purpose"]) not in fold_text(row["purpose"]):
+        return False
+    company_blob = " ".join(
+        (
+            company_value(row["product_name"], row["permit_number"], "owner"),
+            company_value(row["product_name"], row["permit_number"], "manufacturer"),
+            company_value(row["product_name"], row["permit_number"], "representative"),
+        )
+    )
+    if query["company"] and fold_text(query["company"]) not in fold_text(company_blob):
+        return False
+    for field in ("owner", "manufacturer", "representative"):
+        if query[field] and fold_text(query[field]) not in fold_text(
+            company_value(row["product_name"], row["permit_number"], field)
+        ):
+            return False
+    if bbch_number is not None:
+        item = supplement_usage_item(row, bbch_number)
+        if item["bbch_match"] == "no_match":
+            return False
+    return True
 
 
 def usage_item(row: Any, bbch_query: int | None) -> dict[str, str]:
@@ -333,8 +439,21 @@ def pesticide_information(
             elif query["active_substance"]:
                 usage_clauses.append("0 = 1")
             if query["crop"]:
-                usage_clauses.append("fold(u.crop) LIKE ?")
-                usage_parameters.append(f"%{fold_text(query['crop'])}%")
+                crop_term = fold_text(query["crop"])
+                if crop_term in {
+                    "alma",
+                    "almatermesu",
+                    "almatermesuek",
+                    "almastermesu",
+                    "almastermesuek",
+                }:
+                    usage_clauses.append(
+                        "(fold(u.crop) LIKE '%alma%' "
+                        "OR fold(u.crop) LIKE '%almatermesu%')"
+                    )
+                else:
+                    usage_clauses.append("fold(u.crop) LIKE ?")
+                    usage_parameters.append(f"%{crop_term}%")
             if target_terms:
                 target_sql, target_parameters, broader_target = target_search(
                     target_terms
@@ -482,6 +601,40 @@ def pesticide_information(
             ).fetchall()
 
             usage_items = [usage_item(row, bbch_number) for row in usage_rows]
+            supplemental_items = [
+                supplement_usage_item(row, bbch_number)
+                for row in usage_supplements()
+                if supplement_matches(
+                    row,
+                    query,
+                    target_terms,
+                    bbch_number,
+                )
+            ]
+            existing_keys = {
+                (
+                    item["product_name"],
+                    item["permit_number"],
+                    item["crop"],
+                    item["target"],
+                    item["dose"],
+                    item["dose_unit"],
+                )
+                for item in usage_items
+            }
+            usage_items.extend(
+                item
+                for item in supplemental_items
+                if (
+                    item["product_name"],
+                    item["permit_number"],
+                    item["crop"],
+                    item["target"],
+                    item["dose"],
+                    item["dose_unit"],
+                )
+                not in existing_keys
+            )
             if query["crop"]:
                 usage_items = [
                     item
