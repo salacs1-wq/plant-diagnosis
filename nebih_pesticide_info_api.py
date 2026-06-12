@@ -77,6 +77,21 @@ def numeric_bbch(value: Any) -> int | None:
     return int(match.group()) if match else None
 
 
+def crop_matches(value: Any, search: str) -> bool:
+    crop = fold_text(query_value(value))
+    term = fold_text(search)
+    if not crop or not term:
+        return False
+    if crop == term or crop.startswith(term):
+        return True
+    return bool(
+        re.search(
+            rf"(?<![a-z0-9(]){re.escape(term)}(?![a-z0-9])",
+            crop,
+        )
+    )
+
+
 def usage_item(row: Any, bbch_query: int | None) -> dict[str, str]:
     bbch_min = numeric_bbch(row["bbch_min"])
     bbch_max = numeric_bbch(row["bbch_max"])
@@ -96,6 +111,9 @@ def usage_item(row: Any, bbch_query: int | None) -> dict[str, str]:
         "product_name": query_value(row["product_name"]),
         "permit_number": query_value(row["permit_number"]),
         "permit_type": query_value(row["permit_type"]),
+        "owner": query_value(row["owner"]),
+        "manufacturer": query_value(row["manufacturer"]),
+        "representative": query_value(row["representative"]),
         "crop": query_value(row["crop"]),
         "target": query_value(row["target"]),
         "purpose": query_value(row["purpose"]),
@@ -107,6 +125,8 @@ def usage_item(row: Any, bbch_query: int | None) -> dict[str, str]:
         "phi": phi,
         "max_treatments": query_value(row["max_treatments"]),
         "min_interval_days": query_value(row["min_interval_days"]),
+        "expiry_date": query_value(row["expiry_date"]),
+        "latest_document": query_value(row["latest_document"]),
         "source_pdf": query_value(row["source_pdf"]),
     }
 
@@ -148,6 +168,10 @@ def target_search(
 def pesticide_information(
     product_name: str | None = Query(default=None),
     active_substance: str | None = Query(default=None),
+    company: str | None = Query(default=None),
+    owner: str | None = Query(default=None),
+    manufacturer: str | None = Query(default=None),
+    representative: str | None = Query(default=None),
     crop: str | None = Query(default=None),
     target: str | None = Query(default=None),
     pest_or_disease: str | None = Query(default=None),
@@ -164,6 +188,10 @@ def pesticide_information(
     query = response_query(
         product_name=product_name,
         active_substance=active_substance,
+        company=company,
+        owner=owner,
+        manufacturer=manufacturer,
+        representative=representative,
         crop=crop,
         target=target,
         pest_or_disease=pest_or_disease,
@@ -183,6 +211,10 @@ def pesticide_information(
             for key in (
                 "product_name",
                 "active_substance",
+                "company",
+                "owner",
+                "manufacturer",
+                "representative",
                 "crop",
                 "target",
                 "pest_or_disease",
@@ -273,6 +305,20 @@ def pesticide_information(
             if query["purpose"]:
                 usage_clauses.append("fold(p.purpose) LIKE ?")
                 usage_parameters.append(f"%{fold_text(query['purpose'])}%")
+            if query["company"]:
+                usage_clauses.append(
+                    "fold(coalesce(nullif(p.owner_name, ''), p.owner, '')) LIKE ?"
+                )
+                usage_parameters.append(f"%{fold_text(query['company'])}%")
+            if query["owner"]:
+                usage_clauses.append(
+                    "fold(coalesce(nullif(p.owner_name, ''), p.owner, '')) LIKE ?"
+                )
+                usage_parameters.append(f"%{fold_text(query['owner'])}%")
+            if query["manufacturer"]:
+                usage_clauses.append("0 = 1")
+            if query["representative"]:
+                usage_clauses.append("0 = 1")
             if phi_number is not None:
                 usage_clauses.append(
                     "(trim(u.phi_days) = ? OR fold(u.phi_raw) LIKE ?)"
@@ -313,6 +359,11 @@ def pesticide_information(
                         u.bbch_min, u.bbch_max, u.treatment_time,
                         u.phi_days, u.phi_raw, u.max_treatments,
                         u.min_interval_days, p.purpose,
+                        COALESCE(NULLIF(p.owner_name, ''), p.owner, '') AS owner,
+                        '' AS manufacturer,
+                        '' AS representative,
+                        p.expiry_date,
+                        p.latest_document_title AS latest_document,
                         COALESCE(
                             (
                                 SELECT d.document_url
@@ -349,7 +400,9 @@ def pesticide_information(
                     dose_unit, all_doses_raw,
                     bbch_min, bbch_max, treatment_time,
                     phi_days, phi_raw, max_treatments,
-                    min_interval_days, purpose, source_pdf
+                    min_interval_days, purpose, owner,
+                    manufacturer, representative, expiry_date,
+                    latest_document, source_pdf
                 FROM ranked_usage
                 ORDER BY product_row, fold(product_name), fold(crop), usage_id
                 LIMIT ?
@@ -358,6 +411,12 @@ def pesticide_information(
             ).fetchall()
 
             usage_items = [usage_item(row, bbch_number) for row in usage_rows]
+            if query["crop"]:
+                usage_items = [
+                    item
+                    for item in usage_items
+                    if crop_matches(item["crop"], query["crop"])
+                ]
             if bbch_number is not None:
                 exact_items = [
                     item for item in usage_items if item["bbch_match"] == "match"
@@ -403,6 +462,20 @@ def pesticide_information(
             if query["purpose"]:
                 product_filter_clauses.append("fold(purpose) LIKE ?")
                 product_parameters.append(f"%{fold_text(query['purpose'])}%")
+            if query["company"]:
+                product_filter_clauses.append(
+                    "fold(coalesce(nullif(owner_name, ''), owner, '')) LIKE ?"
+                )
+                product_parameters.append(f"%{fold_text(query['company'])}%")
+            if query["owner"]:
+                product_filter_clauses.append(
+                    "fold(coalesce(nullif(owner_name, ''), owner, '')) LIKE ?"
+                )
+                product_parameters.append(f"%{fold_text(query['owner'])}%")
+            if query["manufacturer"]:
+                product_filter_clauses.append("0 = 1")
+            if query["representative"]:
+                product_filter_clauses.append("0 = 1")
             for column, value in (
                 ("akg_allowed", akg_value),
                 ("aop1_bee_allowed", bee_value),
@@ -427,8 +500,9 @@ def pesticide_information(
                 SELECT
                     product_name, permit_number, permit_type, purpose,
                     formulation, issue_date, expiry_date,
+                    COALESCE(NULLIF(owner_name, ''), owner, '') AS owner,
                     akg_allowed, aop1_bee_allowed, organic_allowed,
-                    bee_risk, latest_document_url
+                    bee_risk, latest_document_title, latest_document_url
                 FROM permit_index
                 {product_where}
                 ORDER BY fold(product_name), permit_number
@@ -445,10 +519,16 @@ def pesticide_information(
                     "formulation": query_value(row["formulation"]),
                     "issue_date": query_value(row["issue_date"]),
                     "expiry_date": query_value(row["expiry_date"]),
+                    "owner": query_value(row["owner"]),
+                    "manufacturer": "",
+                    "representative": "",
                     "akg_allowed": bool(row["akg_allowed"]),
                     "aop1_bee_allowed": bool(row["aop1_bee_allowed"]),
                     "organic_allowed": bool(row["organic_allowed"]),
                     "bee_risk": query_value(row["bee_risk"]),
+                    "latest_document": query_value(
+                        row["latest_document_title"]
+                    ),
                     "source_pdf": query_value(row["latest_document_url"]),
                 }
                 for row in product_rows

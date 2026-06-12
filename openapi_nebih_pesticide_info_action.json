@@ -15,7 +15,7 @@
       "get": {
         "operationId": "getPesticideInformation",
         "summary": "Search pesticide products, usages, active substances and documents",
-        "description": "Use for every pesticide query: dose, crop, pest, disease, weed, active substance, BBCH, PHI, restrictions, uses, documents or recommendations. Supply all known search details. If crop is omitted, search every crop for the product.",
+        "description": "Use for every pesticide query: product, company, owner, manufacturer, representative, dose, crop, target, active substance, BBCH, PHI, restrictions, uses or documents. Supply every known search detail.",
         "parameters": [
           {
             "name": "product_name",
@@ -31,6 +31,42 @@
             "in": "query",
             "required": false,
             "description": "Active substance name or partial name, for example azoxistrobin.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "description": "Company name searched across available owner, manufacturer and representative metadata.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "description": "Authorization holder or owner name.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "manufacturer",
+            "in": "query",
+            "required": false,
+            "description": "Pesticide manufacturer name when available in the database.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "representative",
+            "in": "query",
+            "required": false,
+            "description": "Hungarian representative name when available in the database.",
             "schema": {
               "type": "string"
             }
@@ -185,6 +221,10 @@
                       "properties": {
                         "product_name": {"type": "string"},
                         "active_substance": {"type": "string"},
+                        "company": {"type": "string"},
+                        "owner": {"type": "string"},
+                        "manufacturer": {"type": "string"},
+                        "representative": {"type": "string"},
                         "crop": {"type": "string"},
                         "target": {"type": "string"},
                         "pest_or_disease": {"type": "string"},
@@ -211,10 +251,14 @@
                           "formulation": {"type": "string"},
                           "issue_date": {"type": "string"},
                           "expiry_date": {"type": "string"},
+                          "owner": {"type": "string"},
+                          "manufacturer": {"type": "string"},
+                          "representative": {"type": "string"},
                           "akg_allowed": {"type": "boolean"},
                           "aop1_bee_allowed": {"type": "boolean"},
                           "organic_allowed": {"type": "boolean"},
                           "bee_risk": {"type": "string"},
+                          "latest_document": {"type": "string"},
                           "source_pdf": {"type": "string"}
                         },
                         "additionalProperties": false
@@ -242,6 +286,9 @@
                           "product_name": {"type": "string"},
                           "permit_number": {"type": "string"},
                           "permit_type": {"type": "string"},
+                          "owner": {"type": "string"},
+                          "manufacturer": {"type": "string"},
+                          "representative": {"type": "string"},
                           "crop": {"type": "string"},
                           "target": {"type": "string"},
                           "purpose": {"type": "string"},
@@ -253,6 +300,8 @@
                           "phi": {"type": "string"},
                           "max_treatments": {"type": "string"},
                           "min_interval_days": {"type": "string"},
+                          "expiry_date": {"type": "string"},
+                          "latest_document": {"type": "string"},
                           "source_pdf": {"type": "string"}
                         },
                         "additionalProperties": false

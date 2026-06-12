@@ -286,3 +286,99 @@ def test_pesticide_info_missing_search_terms_is_200() -> None:
     assert payload["usages"] == []
     assert payload["documents"] == []
     assert payload["error"]
+
+
+def test_pesticide_info_corteva_apple() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"company": "Corteva", "crop": "alma"},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["usages"]
+    assert all("corteva" in item["owner"].lower() for item in payload["usages"])
+    assert all(
+        item["crop"].lower().startswith("alma") for item in payload["usages"]
+    )
+
+
+def test_pesticide_info_bayer_maize() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"company": "Bayer", "crop": "kukorica"},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["usages"]
+    assert all("bayer" in item["owner"].lower() for item in payload["usages"])
+    assert all("kukorica" in item["crop"].lower() for item in payload["usages"])
+
+
+def test_pesticide_info_syngenta_rape_insecticide() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "company": "Syngenta",
+            "crop": "repce",
+            "purpose": "rovarolo",
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["usages"]
+    assert all("syngenta" in item["owner"].lower() for item in payload["usages"])
+    assert all("repce" in item["crop"].lower() for item in payload["usages"])
+    assert all("rovar" in item["purpose"].lower() for item in payload["usages"])
+
+
+def test_pesticide_info_deltamethrin() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"active_substance": "deltametrin"},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["active_substances"]
+    assert all(
+        "deltametrin" in item["active_substance_name"].lower()
+        for item in payload["active_substances"]
+    )
+
+
+def test_pesticide_info_sunflower_ragweed_category_fallback() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"crop": "napraforgo", "target": "parlagfu"},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["usages"]
+    assert all("napraforg" in item["crop"].lower() for item in payload["usages"])
+    assert "broader weed category" in payload["summary"]["note"]
+
+
+def test_pesticide_info_company_fields_are_explicit() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"company": "Bayer", "crop": "kukorica", "limit": 1},
+    )
+    payload = response.json()
+    usage = payload["usages"][0]
+
+    assert {
+        "owner",
+        "manufacturer",
+        "representative",
+        "expiry_date",
+        "latest_document",
+    } <= set(usage)
