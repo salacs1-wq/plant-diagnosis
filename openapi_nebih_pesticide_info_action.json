@@ -15,7 +15,7 @@
       "get": {
         "operationId": "getPesticideInformation",
         "summary": "Always look up pesticide information in NEBIH",
-        "description": "MUST call before answering any pesticide question about products, doses, crops, pests, weeds, diseases, active substances, companies, BBCH, PHI, AKG, AOP, permits or documents. Never answer from memory. Pass every detail stated by the user; do not require a crop.",
+        "description": "MUST call for pesticide questions. Use META inputs for products, companies, substances, permits or documents. Add crop, target, BBCH, PHI or a usage question_type only when usage details are requested. Never answer from memory.",
         "parameters": [
           {
             "name": "product_name",
@@ -31,6 +31,51 @@
             "in": "query",
             "required": false,
             "description": "Active substance name or partial name, for example azoxistrobin.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "permit_number",
+            "in": "query",
+            "required": false,
+            "description": "Authorization or permit number.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "permit_type",
+            "in": "query",
+            "required": false,
+            "description": "Permit type, for example alapengedely or szarmaztatott.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "expiry_date",
+            "in": "query",
+            "required": false,
+            "description": "Permit expiry date or date fragment.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "marketing_category",
+            "in": "query",
+            "required": false,
+            "description": "Marketing or distribution category.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bee_risk",
+            "in": "query",
+            "required": false,
+            "description": "Bee risk or bee safety classification.",
             "schema": {
               "type": "string"
             }
@@ -221,6 +266,11 @@
                       "properties": {
                         "product_name": {"type": "string"},
                         "active_substance": {"type": "string"},
+                        "permit_number": {"type": "string"},
+                        "permit_type": {"type": "string"},
+                        "expiry_date": {"type": "string"},
+                        "marketing_category": {"type": "string"},
+                        "bee_risk": {"type": "string"},
                         "company": {"type": "string"},
                         "owner": {"type": "string"},
                         "manufacturer": {"type": "string"},
@@ -235,7 +285,11 @@
                         "akg_allowed": {"type": "string"},
                         "aop1_bee_allowed": {"type": "string"},
                         "organic_allowed": {"type": "string"},
-                        "question_type": {"type": "string"}
+                        "question_type": {"type": "string"},
+                        "query_type": {
+                          "type": "string",
+                          "enum": ["META", "USAGE"]
+                        }
                       },
                       "additionalProperties": false
                     },
@@ -249,6 +303,7 @@
                           "permit_type": {"type": "string"},
                           "purpose": {"type": "string"},
                           "formulation": {"type": "string"},
+                          "marketing_category": {"type": "string"},
                           "issue_date": {"type": "string"},
                           "expiry_date": {"type": "string"},
                           "owner": {"type": "string"},
