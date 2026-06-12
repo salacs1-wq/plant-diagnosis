@@ -20,6 +20,7 @@ TARGET_CATEGORY_ALIASES = {
     "parlagfu": ["ketsziku", "gyom"],
 }
 IGNORED_TARGET_WORDS = {"a", "az", "es", "ellen", "illetve", "valamint"}
+USAGE_QUESTION_TYPES = {"dose", "usage", "phi", "recommendation"}
 
 
 def query_value(value: Any) -> str:
@@ -105,6 +106,22 @@ def empty_summary(note: str = "") -> dict[str, Any]:
 
 def response_query(**values: Any) -> dict[str, str]:
     return {key: query_value(value) for key, value in values.items()}
+
+
+def query_route(query: dict[str, str]) -> str:
+    usage_dimensions = (
+        "crop",
+        "target",
+        "pest_or_disease",
+        "weed",
+        "bbch",
+        "phi_days",
+    )
+    if any(query[field] for field in usage_dimensions):
+        return "USAGE"
+    if fold_text(query["question_type"]) in USAGE_QUESTION_TYPES:
+        return "USAGE"
+    return "META"
 
 
 def failure(query: dict[str, str], error: Exception | str) -> dict[str, Any]:
@@ -284,6 +301,226 @@ def placeholders(values: list[Any]) -> str:
     return ", ".join("?" for _ in values)
 
 
+def product_item(row: Any) -> dict[str, Any]:
+    return {
+        "product_name": query_value(row["product_name"]),
+        "permit_number": query_value(row["permit_number"]),
+        "permit_type": query_value(row["permit_type"]),
+        "purpose": query_value(row["purpose"]),
+        "formulation": query_value(row["formulation"]),
+        "marketing_category": query_value(row["marketing_category"]),
+        "issue_date": query_value(row["issue_date"]),
+        "expiry_date": query_value(row["expiry_date"]),
+        "owner": query_value(row["owner"]),
+        "manufacturer": query_value(row["manufacturer"]),
+        "representative": query_value(row["representative"]),
+        "akg_allowed": bool(row["akg_allowed"]),
+        "aop1_bee_allowed": bool(row["aop1_bee_allowed"]),
+        "organic_allowed": bool(row["organic_allowed"]),
+        "bee_risk": query_value(row["bee_risk"]),
+        "latest_document": query_value(row["latest_document_title"]),
+        "source_pdf": query_value(row["latest_document_url"]),
+    }
+
+
+def meta_search(
+    connection: Any,
+    query: dict[str, str],
+    page_size: int,
+    akg_value: int | None,
+    bee_value: int | None,
+    organic_value: int | None,
+) -> dict[str, Any]:
+    clauses: list[str] = []
+    parameters: list[Any] = []
+    if query["product_name"]:
+        clauses.append("fold(p.product_name) LIKE ?")
+        parameters.append(f"%{fold_text(query['product_name'])}%")
+    if query["permit_number"]:
+        clauses.append(f"{PERMIT_KEY.format(column='p.permit_number')} LIKE ?")
+        parameters.append(
+            f"%{normalize_permit_number(query['permit_number'])}%"
+        )
+    if query["permit_type"]:
+        clauses.append("fold(p.permit_type) LIKE ?")
+        parameters.append(f"%{fold_text(query['permit_type'])}%")
+    if query["purpose"]:
+        clauses.append("fold(p.purpose) LIKE ?")
+        parameters.append(f"%{fold_text(query['purpose'])}%")
+    if query["expiry_date"]:
+        clauses.append("fold(p.expiry_date) LIKE ?")
+        parameters.append(f"%{fold_text(query['expiry_date'])}%")
+    if query["marketing_category"]:
+        clauses.append("fold(p.marketing_category) LIKE ?")
+        parameters.append(f"%{fold_text(query['marketing_category'])}%")
+    if query["bee_risk"]:
+        clauses.append("fold(p.bee_risk) LIKE ?")
+        parameters.append(f"%{fold_text(query['bee_risk'])}%")
+    if query["active_substance"]:
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM active_substances AS a
+                WHERE {active_permit} = {permit}
+                  AND fold(a.active_substance_name) LIKE ?
+            )
+            """.format(
+                active_permit=PERMIT_KEY.format(column="a.permit_number"),
+                permit=PERMIT_KEY.format(column="p.permit_number"),
+            )
+        )
+        parameters.append(f"%{fold_text(query['active_substance'])}%")
+    if query["company"]:
+        clauses.append(
+            """
+            (
+                fold(coalesce(nullif(p.owner_name, ''), p.owner, '')) LIKE ?
+                OR fold(company_manufacturer(
+                    p.product_name, p.permit_number
+                )) LIKE ?
+                OR fold(company_representative(
+                    p.product_name, p.permit_number
+                )) LIKE ?
+            )
+            """
+        )
+        company_term = f"%{fold_text(query['company'])}%"
+        parameters.extend([company_term] * 3)
+    if query["owner"]:
+        clauses.append(
+            "fold(coalesce(nullif(p.owner_name, ''), p.owner, '')) LIKE ?"
+        )
+        parameters.append(f"%{fold_text(query['owner'])}%")
+    if query["manufacturer"]:
+        clauses.append(
+            "fold(company_manufacturer(p.product_name, p.permit_number)) LIKE ?"
+        )
+        parameters.append(f"%{fold_text(query['manufacturer'])}%")
+    if query["representative"]:
+        clauses.append(
+            "fold(company_representative(p.product_name, p.permit_number)) LIKE ?"
+        )
+        parameters.append(f"%{fold_text(query['representative'])}%")
+    for column, value in (
+        ("akg_allowed", akg_value),
+        ("aop1_bee_allowed", bee_value),
+        ("organic_allowed", organic_value),
+    ):
+        if value is not None:
+            clauses.append(f"p.{column} = ?")
+            parameters.append(value)
+
+    where_sql = " WHERE " + " AND ".join(clauses) if clauses else " WHERE 0 = 1"
+    product_rows = connection.execute(
+        f"""
+        SELECT
+            p.product_name, p.permit_number, p.permit_type, p.purpose,
+            p.formulation, p.marketing_category, p.issue_date, p.expiry_date,
+            COALESCE(NULLIF(p.owner_name, ''), p.owner, '') AS owner,
+            company_manufacturer(
+                p.product_name, p.permit_number
+            ) AS manufacturer,
+            company_representative(
+                p.product_name, p.permit_number
+            ) AS representative,
+            p.akg_allowed, p.aop1_bee_allowed, p.organic_allowed,
+            p.bee_risk, p.latest_document_title, p.latest_document_url
+        FROM permit_index AS p
+        {where_sql}
+        ORDER BY fold(p.product_name), p.permit_number
+        LIMIT ?
+        """,
+        [*parameters, page_size],
+    ).fetchall()
+    products = [product_item(row) for row in product_rows]
+    permits = unique_strings([item["permit_number"] for item in products])
+
+    substances: list[dict[str, str]] = []
+    if permits:
+        substance_clauses = [
+            f"permit_number IN ({placeholders(permits)})"
+        ]
+        substance_parameters: list[Any] = list(permits)
+        if query["active_substance"]:
+            substance_clauses.append("fold(active_substance_name) LIKE ?")
+            substance_parameters.append(
+                f"%{fold_text(query['active_substance'])}%"
+            )
+        substance_rows = connection.execute(
+            f"""
+            SELECT
+                product_name, permit_number,
+                active_substance_name, content, unit
+            FROM active_substances
+            WHERE {" AND ".join(substance_clauses)}
+            ORDER BY fold(active_substance_name), fold(product_name)
+            LIMIT ?
+            """,
+            [*substance_parameters, page_size],
+        ).fetchall()
+        substances = [
+            {
+                "product_name": query_value(row["product_name"]),
+                "permit_number": query_value(row["permit_number"]),
+                "active_substance_name": query_value(
+                    row["active_substance_name"]
+                ),
+                "content": query_value(row["content"]),
+                "unit": query_value(row["unit"]),
+            }
+            for row in substance_rows
+        ]
+
+    documents: list[dict[str, Any]] = []
+    if permits:
+        document_rows = connection.execute(
+            f"""
+            SELECT
+                product_name, permit_number, document_title,
+                document_url, document_date, document_type,
+                is_latest_document
+            FROM document_links
+            WHERE permit_number IN ({placeholders(permits)})
+            ORDER BY
+                is_latest_document DESC,
+                document_order DESC, id DESC
+            LIMIT ?
+            """,
+            [*permits, page_size],
+        ).fetchall()
+        documents = [
+            {
+                "product_name": query_value(row["product_name"]),
+                "permit_number": query_value(row["permit_number"]),
+                "document_title": query_value(row["document_title"]),
+                "document_url": query_value(row["document_url"]),
+                "document_date": query_value(row["document_date"]),
+                "document_type": query_value(row["document_type"]),
+                "is_latest_document": bool(row["is_latest_document"]),
+            }
+            for row in document_rows
+        ]
+
+    if not any((products, substances, documents)):
+        return failure(query, "No matching data found")
+    return {
+        "ok": True,
+        "query": query,
+        "products": products,
+        "active_substances": substances,
+        "usages": [],
+        "documents": documents,
+        "summary": {
+            "product_count": len(products),
+            "usage_count": 0,
+            "active_substance_count": len(substances),
+            "document_count": len(documents),
+            "note": "META search; usage data was not queried.",
+        },
+    }
+
+
 def target_search(
     terms: list[str],
 ) -> tuple[str, list[str], bool]:
@@ -317,6 +554,11 @@ def target_search(
 def pesticide_information(
     product_name: str | None = Query(default=None),
     active_substance: str | None = Query(default=None),
+    permit_number: str | None = Query(default=None),
+    permit_type: str | None = Query(default=None),
+    expiry_date: str | None = Query(default=None),
+    marketing_category: str | None = Query(default=None),
+    bee_risk: str | None = Query(default=None),
     company: str | None = Query(default=None),
     owner: str | None = Query(default=None),
     manufacturer: str | None = Query(default=None),
@@ -337,6 +579,11 @@ def pesticide_information(
     query = response_query(
         product_name=product_name,
         active_substance=active_substance,
+        permit_number=permit_number,
+        permit_type=permit_type,
+        expiry_date=expiry_date,
+        marketing_category=marketing_category,
+        bee_risk=bee_risk,
         company=company,
         owner=owner,
         manufacturer=manufacturer,
@@ -353,6 +600,7 @@ def pesticide_information(
         organic_allowed=organic_allowed,
         question_type=question_type or "general",
     )
+    query["query_type"] = query_route(query)
     try:
         page_size = parse_limit(limit, default=20, maximum=50)
         if not any(
@@ -360,6 +608,11 @@ def pesticide_information(
             for key in (
                 "product_name",
                 "active_substance",
+                "permit_number",
+                "permit_type",
+                "expiry_date",
+                "marketing_category",
+                "bee_risk",
                 "company",
                 "owner",
                 "manufacturer",
@@ -391,6 +644,15 @@ def pesticide_information(
 
         with closing(connect()) as connection:
             register_company_functions(connection)
+            if query["query_type"] == "META":
+                return meta_search(
+                    connection,
+                    query,
+                    page_size,
+                    akg_value,
+                    bee_value,
+                    organic_value,
+                )
             resolved_names: list[str] = []
             if query["product_name"]:
                 folded_name = fold_text(query["product_name"])
@@ -438,6 +700,16 @@ def pesticide_information(
                 usage_parameters.extend(active_permits)
             elif query["active_substance"]:
                 usage_clauses.append("0 = 1")
+            if query["permit_number"]:
+                usage_clauses.append(
+                    f"{PERMIT_KEY.format(column='u.permit_number')} LIKE ?"
+                )
+                usage_parameters.append(
+                    f"%{normalize_permit_number(query['permit_number'])}%"
+                )
+            if query["permit_type"]:
+                usage_clauses.append("fold(u.permit_type) LIKE ?")
+                usage_parameters.append(f"%{fold_text(query['permit_type'])}%")
             if query["crop"]:
                 crop_term = fold_text(query["crop"])
                 if crop_term in {
@@ -468,6 +740,17 @@ def pesticide_information(
             if query["purpose"]:
                 usage_clauses.append("fold(p.purpose) LIKE ?")
                 usage_parameters.append(f"%{fold_text(query['purpose'])}%")
+            if query["expiry_date"]:
+                usage_clauses.append("fold(p.expiry_date) LIKE ?")
+                usage_parameters.append(f"%{fold_text(query['expiry_date'])}%")
+            if query["marketing_category"]:
+                usage_clauses.append("fold(p.marketing_category) LIKE ?")
+                usage_parameters.append(
+                    f"%{fold_text(query['marketing_category'])}%"
+                )
+            if query["bee_risk"]:
+                usage_clauses.append("fold(p.bee_risk) LIKE ?")
+                usage_parameters.append(f"%{fold_text(query['bee_risk'])}%")
             if query["company"]:
                 usage_clauses.append(
                     """

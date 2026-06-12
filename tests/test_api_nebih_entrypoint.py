@@ -1,9 +1,13 @@
+import sqlite3
+import sys
+
 from fastapi.testclient import TestClient
 
 from nebih_api import app
 
 
 client = TestClient(app)
+nebih_pesticide_info_api = sys.modules["nebih_pesticide_info_api"]
 
 
 def test_nebih_entrypoint_exposes_only_expected_api_paths() -> None:
@@ -185,7 +189,7 @@ def test_action_validation_errors_are_200() -> None:
         assert payload["error"]
 
 
-def test_pesticide_info_product_includes_related_data() -> None:
+def test_pesticide_info_product_meta_excludes_usage() -> None:
     response = client.get(
         "/action/pesticide-info",
         params={"product_name": "Racer", "limit": 20},
@@ -196,14 +200,15 @@ def test_pesticide_info_product_includes_related_data() -> None:
     assert payload["ok"] is True
     assert payload["products"]
     assert payload["active_substances"]
-    assert payload["usages"]
+    assert payload["usages"] == []
     assert payload["documents"]
+    assert payload["query"]["query_type"] == "META"
     assert {"Racer", "Racer 25 EC", "Racer 250 EC"} <= {
-        item["product_name"] for item in payload["usages"]
+        item["product_name"] for item in payload["products"]
     }
 
 
-def test_pesticide_info_active_substance_returns_products_and_usages() -> None:
+def test_pesticide_info_active_substance_is_meta_search() -> None:
     response = client.get(
         "/action/pesticide-info",
         params={"active_substance": "azoxistrobin", "limit": 20},
@@ -213,7 +218,8 @@ def test_pesticide_info_active_substance_returns_products_and_usages() -> None:
     assert response.status_code == 200
     assert payload["ok"] is True
     assert payload["products"]
-    assert payload["usages"]
+    assert payload["usages"] == []
+    assert payload["query"]["query_type"] == "META"
     assert any(
         "azoxistrobin" in item["active_substance_name"].lower()
         for item in payload["active_substances"]
@@ -438,7 +444,7 @@ def test_pesticide_info_company_fields_are_explicit() -> None:
         params={"product_name": "Adengo", "limit": 1},
     )
     payload = response.json()
-    usage = payload["usages"][0]
+    product = payload["products"][0]
 
     assert {
         "owner",
@@ -446,9 +452,10 @@ def test_pesticide_info_company_fields_are_explicit() -> None:
         "representative",
         "expiry_date",
         "latest_document",
-    } <= set(usage)
-    assert "Bayer" in usage["manufacturer"]
-    assert "Bayer Hung" in usage["representative"]
+    } <= set(product)
+    assert payload["usages"] == []
+    assert "Bayer" in product["manufacturer"]
+    assert "Bayer Hung" in product["representative"]
 
 
 def test_pesticide_info_manufacturer_filter() -> None:
@@ -460,10 +467,11 @@ def test_pesticide_info_manufacturer_filter() -> None:
 
     assert response.status_code == 200
     assert payload["ok"] is True
-    assert payload["usages"]
+    assert payload["products"]
+    assert payload["usages"] == []
     assert all(
         "sharda cropchem" in item["manufacturer"].lower()
-        for item in payload["usages"]
+        for item in payload["products"]
     )
 
 
@@ -476,8 +484,115 @@ def test_pesticide_info_representative_filter() -> None:
 
     assert response.status_code == 200
     assert payload["ok"] is True
-    assert payload["usages"]
+    assert payload["products"]
+    assert payload["usages"] == []
     assert all(
         "syngenta kft" in item["representative"].lower()
-        for item in payload["usages"]
+        for item in payload["products"]
     )
+
+
+def test_pesticide_info_company_only_routes_to_meta() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"company": "Adama", "limit": 10},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["query"]["query_type"] == "META"
+    assert payload["products"]
+    assert payload["usages"] == []
+    assert payload["summary"]["usage_count"] == 0
+
+
+def test_pesticide_info_meta_does_not_read_usage_table(monkeypatch) -> None:
+    real_connect = nebih_pesticide_info_api.connect
+
+    def connect_without_usage_reads():
+        connection = real_connect()
+
+        def authorize(action, table, _column, _database, _trigger):
+            if action == sqlite3.SQLITE_READ and table == "usage":
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        connection.set_authorizer(authorize)
+        return connection
+
+    monkeypatch.setattr(
+        nebih_pesticide_info_api,
+        "connect",
+        connect_without_usage_reads,
+    )
+    payload = client.get(
+        "/action/pesticide-info",
+        params={"company": "Adama", "limit": 5},
+    ).json()
+
+    assert payload["ok"] is True
+    assert payload["query"]["query_type"] == "META"
+    assert payload["usages"] == []
+
+
+def test_pesticide_info_company_and_crop_routes_to_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"company": "Adama", "crop": "napraforgo", "limit": 10},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["query"]["query_type"] == "USAGE"
+    assert payload["usages"]
+
+
+def test_pesticide_info_question_type_controls_routing() -> None:
+    meta = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Adengo",
+            "question_type": "active_substance",
+        },
+    ).json()
+    usage = client.get(
+        "/action/pesticide-info",
+        params={"product_name": "Adengo", "question_type": "dose"},
+    ).json()
+
+    assert meta["query"]["query_type"] == "META"
+    assert meta["active_substances"]
+    assert meta["usages"] == []
+    assert usage["query"]["query_type"] == "USAGE"
+    assert usage["usages"]
+
+
+def test_pesticide_info_product_and_crop_routes_to_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Sumi Alfa 5 EC",
+            "crop": "burgonya",
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["query"]["query_type"] == "USAGE"
+    assert payload["usages"]
+
+
+def test_pesticide_info_permit_metadata_filters() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"permit_number": "02.5/568/2/2009", "limit": 5},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["query"]["query_type"] == "META"
+    assert payload["products"]
+    assert payload["usages"] == []
