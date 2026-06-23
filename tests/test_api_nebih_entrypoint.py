@@ -24,7 +24,6 @@ def test_nebih_entrypoint_exposes_only_expected_api_paths() -> None:
         "/action/dose",
         "/action/documents",
         "/action/pesticide-info",
-        "/action/pesticide-answer",
     }
     assert client.post("/diagnose", json={}).status_code == 404
     assert client.post("/diagnose-dp", json={}).status_code == 404
@@ -597,22 +596,6 @@ def test_pesticide_info_permit_metadata_filters() -> None:
     assert payload["query"]["query_type"] == "META"
     assert payload["products"]
     assert payload["usages"] == []
-
-
-def test_pesticide_answer_adengo_is_compact_for_actions() -> None:
-    response = client.get(
-        "/action/pesticide-answer",
-        params={"product_name": "Adengo", "question_type": "dose", "limit": 50},
-    )
-    payload = response.json()
-
-    assert response.status_code == 200
-    assert payload["ok"] is True
-    assert payload["status"] == "VERIFIED_USAGE"
-    assert payload["usages"]
-    assert len(payload["documents"]) <= 3
-    assert "popup_matches" not in payload
-    assert all(item["dose"] for item in payload["usages"])
 
 
 def test_pesticide_info_product_only_does_not_verify_usage() -> None:
