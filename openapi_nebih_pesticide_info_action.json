@@ -258,6 +258,17 @@
                     "ok": {
                       "type": "boolean"
                     },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "VERIFIED_USAGE",
+                        "PRODUCT_ONLY",
+                        "POPUP_ONLY",
+                        "DOCUMENT_ONLY",
+                        "NOT_FOUND",
+                        "AMBIGUOUS_LIMITED"
+                      ]
+                    },
                     "error": {
                       "type": "string"
                     },
@@ -298,6 +309,7 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "status": {"type": "string"},
                           "product_name": {"type": "string"},
                           "permit_number": {"type": "string"},
                           "permit_type": {"type": "string"},
@@ -313,6 +325,28 @@
                           "aop1_bee_allowed": {"type": "boolean"},
                           "organic_allowed": {"type": "boolean"},
                           "bee_risk": {"type": "string"},
+                          "crop_raw": {"type": "string"},
+                          "target_raw": {"type": "string"},
+                          "popup_crops": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          },
+                          "popup_targets": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          },
+                          "popup_pests": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          },
+                          "popup_diseases": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          },
+                          "popup_weeds": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          },
                           "latest_document": {"type": "string"},
                           "source_pdf": {"type": "string"}
                         },
@@ -324,6 +358,7 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "status": {"type": "string"},
                           "product_name": {"type": "string"},
                           "permit_number": {"type": "string"},
                           "active_substance_name": {"type": "string"},
@@ -338,6 +373,7 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "status": {"type": "string"},
                           "product_name": {"type": "string"},
                           "permit_number": {"type": "string"},
                           "permit_type": {"type": "string"},
@@ -358,6 +394,48 @@
                           "expiry_date": {"type": "string"},
                           "latest_document": {"type": "string"},
                           "source_pdf": {"type": "string"}
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "popup_matches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "status": {"type": "string"},
+                          "product_name": {"type": "string"},
+                          "permit_number": {"type": "string"},
+                          "permit_type": {"type": "string"},
+                          "owner": {"type": "string"},
+                          "manufacturer": {"type": "string"},
+                          "representative": {"type": "string"},
+                          "purpose": {"type": "string"},
+                          "expiry_date": {"type": "string"},
+                          "latest_document": {"type": "string"},
+                          "source_pdf": {"type": "string"},
+                          "crop_raw": {"type": "string"},
+                          "target_raw": {"type": "string"},
+                          "popup_crops": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          },
+                          "popup_targets": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          },
+                          "popup_pests": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          },
+                          "popup_diseases": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          },
+                          "popup_weeds": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                          }
                         },
                         "additionalProperties": false
                       }
@@ -383,8 +461,11 @@
                       "properties": {
                         "product_count": {"type": "integer"},
                         "usage_count": {"type": "integer"},
+                        "popup_match_count": {"type": "integer"},
                         "active_substance_count": {"type": "integer"},
                         "document_count": {"type": "integer"},
+                        "has_more_usage": {"type": "boolean"},
+                        "total_usage_matches": {"type": "integer"},
                         "note": {"type": "string"}
                       },
                       "additionalProperties": false
@@ -392,10 +473,12 @@
                   },
                   "required": [
                     "ok",
+                    "status",
                     "query",
                     "products",
                     "active_substances",
                     "usages",
+                    "popup_matches",
                     "documents",
                     "summary"
                   ],
