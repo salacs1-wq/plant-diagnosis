@@ -1,0 +1,11 @@
+﻿metric,value,detail
+product_records_without_usage,0,
+usage_missing_bbch,1066,"Missing bbch_min, bbch_max and treatment_time."
+usage_missing_phi,7903,Missing phi_days and phi_raw.
+usage_multiple_crops_in_one_cell,3989,"Comma, semicolon or 'es' detected in crop cell."
+usage_multiple_targets_in_one_cell,4802,"Comma, semicolon or 'es' detected in target cell."
+potentially_truncated_by_limit,13,Product/permit pairs with more than 20 usage rows.
+popup_meta_crop_records,2074,permit_index.crop_raw is populated.
+popup_meta_target_records,1966,permit_index.target_raw is populated.
+popup_fields_crop_like_records,6955,popup_fields contains crop-like field names or values.
+popup_fields_target_like_records,2747,popup_fields contains target-like field names or values.

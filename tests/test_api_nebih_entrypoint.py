@@ -435,7 +435,7 @@ def test_pesticide_info_sunflower_ragweed_category_fallback() -> None:
     assert payload["ok"] is True
     assert payload["usages"]
     assert all("napraforg" in item["crop"].lower() for item in payload["usages"])
-    assert "broader weed category" in payload["summary"]["note"]
+    assert "broader synonym/category" in payload["summary"]["note"]
 
 
 def test_pesticide_info_company_fields_are_explicit() -> None:
@@ -596,3 +596,85 @@ def test_pesticide_info_permit_metadata_filters() -> None:
     assert payload["query"]["query_type"] == "META"
     assert payload["products"]
     assert payload["usages"] == []
+
+
+def test_pesticide_info_product_only_does_not_verify_usage() -> None:
+    for product_name, crop in (
+        ("Rexade", "arpa"),
+        ("Command", "koriander"),
+    ):
+        response = client.get(
+            "/action/pesticide-info",
+            params={"product_name": product_name, "crop": crop, "limit": 10},
+        )
+        payload = response.json()
+
+        assert response.status_code == 200
+        assert payload["ok"] is True
+        assert payload["status"] == "PRODUCT_ONLY"
+        assert payload["usages"] == []
+        assert payload["popup_matches"] == []
+        assert "dózis nem adható" in payload["summary"]["note"]
+
+
+def test_pesticide_info_popup_only_requires_document_check() -> None:
+    cases = (
+        {"product_name": "Targa Super", "crop": "szoja"},
+        {
+            "product_name": "Sumi Alfa",
+            "crop": "szolo",
+            "target": "amerikai szolokaboca",
+        },
+    )
+    for params in cases:
+        response = client.get(
+            "/action/pesticide-info",
+            params={**params, "limit": 10},
+        )
+        payload = response.json()
+
+        assert response.status_code == 200
+        assert payload["ok"] is True
+        assert payload["status"] == "POPUP_ONLY"
+        assert payload["usages"] == []
+        assert payload["popup_matches"]
+        assert "dokumentumellenőrzés szükséges" in payload["summary"]["note"]
+
+
+def test_pesticide_info_verified_usage_status() -> None:
+    cases = (
+        {
+            "product_name": "Carnadine",
+            "crop": "szolo",
+            "target": "amerikai szolokaboca",
+        },
+        {"product_name": "Focus Ultra", "crop": "szoja"},
+        {"product_name": "Switch", "crop": "szolo"},
+    )
+    for params in cases:
+        response = client.get(
+            "/action/pesticide-info",
+            params={**params, "limit": 10},
+        )
+        payload = response.json()
+
+        assert response.status_code == 200
+        assert payload["ok"] is True
+        assert payload["status"] == "VERIFIED_USAGE"
+        assert payload["usages"]
+        assert all(item["status"] == "VERIFIED_USAGE" for item in payload["usages"])
+
+
+def test_pesticide_info_limit_status_warns_about_more_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={"product_name": "Agil 100 EC", "crop": "koriander", "limit": 3},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["status"] == "AMBIGUOUS_LIMITED"
+    assert payload["summary"]["has_more_usage"] is True
+    assert payload["summary"]["total_usage_matches"] > payload["summary"]["usage_count"]
+    assert "Lehetséges további találat" in payload["summary"]["note"]
