@@ -17,58 +17,14 @@ COMPANY_METADATA_PATH = Path(__file__).resolve().parent / "nebih_company_metadat
 USAGE_SUPPLEMENT_PATH = Path(__file__).resolve().parent / "nebih_usage_supplement.csv"
 PERMIT_KEY = "replace(replace(trim({column}), ' ', ''), '.', '/')"
 TARGET_CATEGORY_ALIASES = {
-    "parlagfu": [["ketsziku", "gyom"]],
-    "amerikaiszolokaboca": [
-        ["amerikai", "szolo", "kaboca"],
-        ["kaboca"],
-        ["scaphoideus", "titanus"],
-    ],
-    "kaboca": [["kaboca"], ["scaphoideus", "titanus"]],
-    "scaphoideustitanus": [
-        ["scaphoideus", "titanus"],
-        ["amerikai", "szolo", "kaboca"],
-        ["kaboca"],
-    ],
-    "peronoszpora": [["peronoszpora"], ["szoloperonoszpora"]],
-    "szoloperonoszpora": [["peronoszpora"]],
-    "lisztharmat": [["lisztharmat"], ["szololisztharmat"]],
-    "szololisztharmat": [["lisztharmat"]],
-    "szurkepenesz": [["szurkepenesz"], ["botritisz"], ["botrytis"]],
-    "botritisz": [["szurkepenesz"], ["botritisz"], ["botrytis"]],
+    "parlagfu": ["ketsziku", "gyom"],
 }
 IGNORED_TARGET_WORDS = {"a", "az", "es", "ellen", "illetve", "valamint"}
 USAGE_QUESTION_TYPES = {"dose", "usage", "phi", "recommendation"}
-VERIFIED_USAGE = "VERIFIED_USAGE"
-PRODUCT_ONLY = "PRODUCT_ONLY"
-POPUP_ONLY = "POPUP_ONLY"
-DOCUMENT_ONLY = "DOCUMENT_ONLY"
-NOT_FOUND = "NOT_FOUND"
-AMBIGUOUS_LIMITED = "AMBIGUOUS_LIMITED"
 
 
 def query_value(value: Any) -> str:
     return text(value).strip()
-
-
-def search_fold(value: Any) -> str:
-    return (
-        fold_text(query_value(value))
-        .replace("õ", "o")
-        .replace("Õ", "o")
-        .replace("û", "u")
-        .replace("Û", "u")
-    )
-
-
-def sql_fold_terms(value: str) -> list[str]:
-    folded = fold_text(value)
-    normalized = search_fold(value)
-    terms = [folded, normalized]
-    if "o" in normalized:
-        terms.append(normalized.replace("o", "õ"))
-    if "u" in normalized:
-        terms.append(normalized.replace("u", "û"))
-    return unique_strings(terms)
 
 
 @lru_cache(maxsize=1)
@@ -142,11 +98,8 @@ def empty_summary(note: str = "") -> dict[str, Any]:
     return {
         "product_count": 0,
         "usage_count": 0,
-        "popup_match_count": 0,
         "active_substance_count": 0,
         "document_count": 0,
-        "has_more_usage": False,
-        "total_usage_matches": 0,
         "note": note,
     }
 
@@ -174,13 +127,11 @@ def query_route(query: dict[str, str]) -> str:
 def failure(query: dict[str, str], error: Exception | str) -> dict[str, Any]:
     return {
         "ok": False,
-        "status": NOT_FOUND,
         "error": str(error),
         "query": query,
         "products": [],
         "active_substances": [],
         "usages": [],
-        "popup_matches": [],
         "documents": [],
         "summary": empty_summary(),
     }
@@ -196,8 +147,8 @@ def numeric_bbch(value: Any) -> int | None:
 
 
 def crop_matches(value: Any, search: str) -> bool:
-    crop = search_fold(value)
-    term = search_fold(search)
+    crop = fold_text(query_value(value))
+    term = fold_text(search)
     if not crop or not term:
         return False
     apple_terms = {"alma", "almatermesu", "almatermesuek", "almastermesu", "almastermesuek"}
@@ -206,8 +157,6 @@ def crop_matches(value: Any, search: str) -> bool:
             re.search(r"(?<![a-z0-9(])alma(?![a-z0-9])", crop)
             or re.search(r"(?<![a-z0-9])almatermesu", crop)
         )
-    if "szolo" in term:
-        return "szolo" in crop or "borszolo" in crop or "csemegeszolo" in crop
     if crop == term or crop.startswith(term):
         return True
     return bool(
@@ -216,102 +165,6 @@ def crop_matches(value: Any, search: str) -> bool:
             crop,
         )
     )
-
-
-def split_popup_terms(value: Any) -> list[str]:
-    raw = query_value(value)
-    if not raw:
-        return []
-    parts = re.split(r"[,;\n]+", raw)
-    cleaned = []
-    for part in parts:
-        item = re.sub(r"\s+-\s+[A-Z0-9]+$", "", part).strip()
-        if item:
-            cleaned.append(item)
-    return unique_strings(cleaned)
-
-
-def target_groups(terms: list[str]) -> tuple[list[list[str]], bool]:
-    groups: list[list[str]] = []
-    broader_category_used = False
-    for term in terms:
-        folded = search_fold(term)
-        if not folded:
-            continue
-        groups.append([folded])
-        tokens = [
-            "gyom" if token.startswith("gyom") else token
-            for token in re.findall(r"[a-z0-9]+", folded)
-            if token not in IGNORED_TARGET_WORDS
-        ]
-        if len(tokens) > 1:
-            groups.append(tokens)
-        key = "".join(tokens) or folded
-        if key in TARGET_CATEGORY_ALIASES:
-            groups.extend(TARGET_CATEGORY_ALIASES[key])
-            broader_category_used = True
-    return groups, broader_category_used
-
-
-def target_text_matches(value: Any, terms: list[str]) -> bool:
-    if not terms:
-        return True
-    haystack = search_fold(value)
-    groups, _broader = target_groups(terms)
-    return any(all(word in haystack for word in group) for group in groups)
-
-
-def popup_index(row: Any) -> dict[str, list[str]]:
-    crops = split_popup_terms(row["crop_raw"])
-    targets = split_popup_terms(row["target_raw"])
-    weed_markers = ("gyom", "parlagfu", "fenyerc", "tarack", "arvakeles")
-    disease_markers = (
-        "peronoszpora",
-        "lisztharmat",
-        "szurkepenesz",
-        "botritisz",
-        "botrytis",
-        "rozsda",
-        "foltossag",
-        "monilia",
-        "fuzari",
-        "alternaria",
-        "feherpenesz",
-        "betegseg",
-    )
-    pest_markers = (
-        "kaboca",
-        "scaphoideus",
-        "bogar",
-        "moly",
-        "tetu",
-        "lepke",
-        "hernyo",
-        "tripsz",
-        "atka",
-        "legy",
-        "larva",
-    )
-    weeds: list[str] = []
-    diseases: list[str] = []
-    pests: list[str] = []
-    for item in targets:
-        folded = search_fold(item)
-        if any(marker in folded for marker in weed_markers):
-            weeds.append(item)
-        if any(marker in folded for marker in disease_markers):
-            diseases.append(item)
-        if any(marker in folded for marker in pest_markers) or (
-            item not in weeds and item not in diseases
-        ):
-            pests.append(item)
-    return {
-        "popup_crops": crops,
-        "popup_targets": targets,
-        "popup_pests": unique_strings(pests),
-        "popup_diseases": unique_strings(diseases),
-        "popup_weeds": unique_strings(weeds),
-    }
 
 
 def supplement_usage_item(row: dict[str, str], bbch_query: int | None) -> dict[str, str]:
@@ -327,7 +180,6 @@ def supplement_usage_item(row: dict[str, str], bbch_query: int | None) -> dict[s
             else "match" if low <= bbch_query <= high else "no_match"
         )
     return {
-        "status": VERIFIED_USAGE,
         "product_name": row["product_name"],
         "permit_number": row["permit_number"],
         "permit_type": row["permit_type"],
@@ -379,7 +231,9 @@ def supplement_matches(
         return False
     if query["crop"] and not crop_matches(row["crop"], query["crop"]):
         return False
-    if target_terms and not target_text_matches(row["target"], target_terms):
+    if target_terms and not all(
+        fold_text(term) in fold_text(row["target"]) for term in target_terms
+    ):
         return False
     if query["purpose"] and fold_text(query["purpose"]) not in fold_text(row["purpose"]):
         return False
@@ -420,7 +274,6 @@ def usage_item(row: Any, bbch_query: int | None) -> dict[str, str]:
     )
     phi = query_value(row["phi_raw"]) or query_value(row["phi_days"])
     return {
-        "status": VERIFIED_USAGE,
         "product_name": query_value(row["product_name"]),
         "permit_number": query_value(row["permit_number"]),
         "permit_type": query_value(row["permit_type"]),
@@ -449,9 +302,7 @@ def placeholders(values: list[Any]) -> str:
 
 
 def product_item(row: Any) -> dict[str, Any]:
-    popup = popup_index(row)
     return {
-        "status": PRODUCT_ONLY,
         "product_name": query_value(row["product_name"]),
         "permit_number": query_value(row["permit_number"]),
         "permit_type": query_value(row["permit_type"]),
@@ -467,69 +318,9 @@ def product_item(row: Any) -> dict[str, Any]:
         "aop1_bee_allowed": bool(row["aop1_bee_allowed"]),
         "organic_allowed": bool(row["organic_allowed"]),
         "bee_risk": query_value(row["bee_risk"]),
-        "crop_raw": query_value(row["crop_raw"]),
-        "target_raw": query_value(row["target_raw"]),
-        **popup,
         "latest_document": query_value(row["latest_document_title"]),
         "source_pdf": query_value(row["latest_document_url"]),
     }
-
-
-def popup_match_item(row: Any) -> dict[str, Any]:
-    popup = popup_index(row)
-    return {
-        "status": POPUP_ONLY,
-        "product_name": query_value(row["product_name"]),
-        "permit_number": query_value(row["permit_number"]),
-        "permit_type": query_value(row["permit_type"]),
-        "owner": query_value(row["owner"]),
-        "manufacturer": query_value(row["manufacturer"]),
-        "representative": query_value(row["representative"]),
-        "purpose": query_value(row["purpose"]),
-        "expiry_date": query_value(row["expiry_date"]),
-        "latest_document": query_value(row["latest_document_title"]),
-        "source_pdf": query_value(row["latest_document_url"]),
-        "crop_raw": query_value(row["crop_raw"]),
-        "target_raw": query_value(row["target_raw"]),
-        **popup,
-    }
-
-
-def popup_matches_query(
-    connection: Any,
-    product_where: str,
-    product_parameters: list[Any],
-    query: dict[str, str],
-    target_terms: list[str],
-    page_size: int,
-) -> list[dict[str, Any]]:
-    rows = connection.execute(
-        f"""
-        SELECT
-            product_name, permit_number, permit_type, purpose,
-            expiry_date, COALESCE(NULLIF(owner_name, ''), owner, '') AS owner,
-            company_manufacturer(product_name, permit_number) AS manufacturer,
-            company_representative(product_name, permit_number) AS representative,
-            latest_document_title, latest_document_url, crop_raw, target_raw
-        FROM permit_index
-        {product_where}
-        ORDER BY fold(product_name), permit_number
-        LIMIT ?
-        """,
-        [*product_parameters, max(page_size * 3, 30)],
-    ).fetchall()
-    matches = []
-    for row in rows:
-        if query["crop"] and not crop_matches(row["crop_raw"], query["crop"]):
-            continue
-        if target_terms and not target_text_matches(row["target_raw"], target_terms):
-            continue
-        if not query["crop"] and not target_terms:
-            continue
-        matches.append(popup_match_item(row))
-        if len(matches) >= page_size:
-            break
-    return matches
 
 
 def meta_search(
@@ -634,8 +425,7 @@ def meta_search(
                 p.product_name, p.permit_number
             ) AS representative,
             p.akg_allowed, p.aop1_bee_allowed, p.organic_allowed,
-            p.bee_risk, p.crop_raw, p.target_raw,
-            p.latest_document_title, p.latest_document_url
+            p.bee_risk, p.latest_document_title, p.latest_document_url
         FROM permit_index AS p
         {where_sql}
         ORDER BY fold(p.product_name), p.permit_number
@@ -716,21 +506,16 @@ def meta_search(
         return failure(query, "No matching data found")
     return {
         "ok": True,
-        "status": PRODUCT_ONLY,
         "query": query,
         "products": products,
         "active_substances": substances,
         "usages": [],
-        "popup_matches": [],
         "documents": documents,
         "summary": {
             "product_count": len(products),
             "usage_count": 0,
-            "popup_match_count": 0,
             "active_substance_count": len(substances),
             "document_count": len(documents),
-            "has_more_usage": False,
-            "total_usage_matches": 0,
             "note": "META search; usage data was not queried.",
         },
     }
@@ -741,16 +526,27 @@ def target_search(
 ) -> tuple[str, list[str], bool]:
     groups: list[str] = []
     parameters: list[str] = []
-    word_groups, broader_category_used = target_groups(terms)
-    for words in word_groups:
-        word_sql = []
-        for word in words:
-            variants = sql_fold_terms(word)
-            word_sql.append(
-                "(" + " OR ".join("fold(u.target) LIKE ?" for _ in variants) + ")"
+    broader_category_used = False
+    for term in terms:
+        folded = fold_text(term)
+        alternatives: list[tuple[list[str], bool]] = [([folded], False)]
+        tokens = [
+            "gyom" if token.startswith("gyom") else token
+            for token in re.findall(r"[a-z0-9]+", folded)
+            if token not in IGNORED_TARGET_WORDS
+        ]
+        if len(tokens) > 1:
+            alternatives.append((tokens, False))
+        if folded in TARGET_CATEGORY_ALIASES:
+            alternatives.append((TARGET_CATEGORY_ALIASES[folded], True))
+        alternative_sql: list[str] = []
+        for words, is_broader in alternatives:
+            alternative_sql.append(
+                "(" + " AND ".join("fold(u.target) LIKE ?" for _ in words) + ")"
             )
-            parameters.extend(f"%{variant}%" for variant in variants)
-        groups.append("(" + " AND ".join(word_sql) + ")")
+            parameters.extend(f"%{word}%" for word in words)
+            broader_category_used = broader_category_used or is_broader
+        groups.append("(" + " OR ".join(alternative_sql) + ")")
     return "(" + " OR ".join(groups) + ")", parameters, broader_category_used
 
 
@@ -845,8 +641,6 @@ def pesticide_information(
             ]
         )
         note_parts: list[str] = []
-        total_usage_matches = 0
-        has_more_usage = False
 
         with closing(connect()) as connection:
             register_company_functions(connection)
@@ -917,7 +711,7 @@ def pesticide_information(
                 usage_clauses.append("fold(u.permit_type) LIKE ?")
                 usage_parameters.append(f"%{fold_text(query['permit_type'])}%")
             if query["crop"]:
-                crop_term = search_fold(query["crop"])
+                crop_term = fold_text(query["crop"])
                 if crop_term in {
                     "alma",
                     "almatermesu",
@@ -929,19 +723,9 @@ def pesticide_information(
                         "(fold(u.crop) LIKE '%alma%' "
                         "OR fold(u.crop) LIKE '%almatermesu%')"
                     )
-                elif "szolo" in crop_term:
-                    usage_clauses.append(
-                        "(fold(u.crop) LIKE '%szolo%' "
-                        "OR fold(u.crop) LIKE '%szõlõ%')"
-                    )
                 else:
-                    crop_terms = sql_fold_terms(query["crop"])
-                    usage_clauses.append(
-                        "("
-                        + " OR ".join("fold(u.crop) LIKE ?" for _ in crop_terms)
-                        + ")"
-                    )
-                    usage_parameters.extend(f"%{term}%" for term in crop_terms)
+                    usage_clauses.append("fold(u.crop) LIKE ?")
+                    usage_parameters.append(f"%{crop_term}%")
             if target_terms:
                 target_sql, target_parameters, broader_target = target_search(
                     target_terms
@@ -950,8 +734,8 @@ def pesticide_information(
                 usage_parameters.extend(target_parameters)
                 if broader_target:
                     note_parts.append(
-                        "The exact target term was not present in the usage "
-                        "table; a broader synonym/category was also searched."
+                        "The exact weed species was not present in the usage "
+                        "table; a broader weed category was also searched."
                     )
             if query["purpose"]:
                 usage_clauses.append("fold(p.purpose) LIKE ?")
@@ -1091,8 +875,7 @@ def pesticide_information(
                     phi_days, phi_raw, max_treatments,
                     min_interval_days, purpose, owner,
                     manufacturer, representative, expiry_date,
-                    latest_document, source_pdf,
-                    COUNT(*) OVER() AS total_usage_matches
+                    latest_document, source_pdf
                 FROM ranked_usage
                 ORDER BY product_row, fold(product_name), fold(crop), usage_id
                 LIMIT ?
@@ -1100,9 +883,6 @@ def pesticide_information(
                 [*usage_parameters, candidate_limit],
             ).fetchall()
 
-            total_usage_matches = (
-                int(usage_rows[0]["total_usage_matches"]) if usage_rows else 0
-            )
             usage_items = [usage_item(row, bbch_number) for row in usage_rows]
             supplemental_items = [
                 supplement_usage_item(row, bbch_number)
@@ -1163,12 +943,6 @@ def pesticide_information(
                     )
                 else:
                     usage_items = []
-            filtered_usage_count = len(usage_items)
-            has_more_usage = (
-                filtered_usage_count > page_size
-                or total_usage_matches > page_size
-                or len(usage_rows) >= candidate_limit
-            )
             usage_items = usage_items[:page_size]
             usage_permits = unique_strings(
                 [item["permit_number"] for item in usage_items]
@@ -1255,7 +1029,7 @@ def pesticide_information(
                 f"""
                 SELECT
                     product_name, permit_number, permit_type, purpose,
-                    formulation, marketing_category, issue_date, expiry_date,
+                    formulation, issue_date, expiry_date,
                     COALESCE(NULLIF(owner_name, ''), owner, '') AS owner,
                     company_manufacturer(
                         product_name, permit_number
@@ -1264,8 +1038,7 @@ def pesticide_information(
                         product_name, permit_number
                     ) AS representative,
                     akg_allowed, aop1_bee_allowed, organic_allowed,
-                    bee_risk, crop_raw, target_raw,
-                    latest_document_title, latest_document_url
+                    bee_risk, latest_document_title, latest_document_url
                 FROM permit_index
                 {product_where}
                 ORDER BY fold(product_name), permit_number
@@ -1273,15 +1046,29 @@ def pesticide_information(
                 """,
                 [*product_parameters, page_size],
             ).fetchall()
-            products = [product_item(row) for row in product_rows]
-            popup_matches = popup_matches_query(
-                connection,
-                product_where,
-                product_parameters,
-                query,
-                target_terms,
-                page_size,
-            )
+            products = [
+                {
+                    "product_name": query_value(row["product_name"]),
+                    "permit_number": query_value(row["permit_number"]),
+                    "permit_type": query_value(row["permit_type"]),
+                    "purpose": query_value(row["purpose"]),
+                    "formulation": query_value(row["formulation"]),
+                    "issue_date": query_value(row["issue_date"]),
+                    "expiry_date": query_value(row["expiry_date"]),
+                    "owner": query_value(row["owner"]),
+                    "manufacturer": query_value(row["manufacturer"]),
+                    "representative": query_value(row["representative"]),
+                    "akg_allowed": bool(row["akg_allowed"]),
+                    "aop1_bee_allowed": bool(row["aop1_bee_allowed"]),
+                    "organic_allowed": bool(row["organic_allowed"]),
+                    "bee_risk": query_value(row["bee_risk"]),
+                    "latest_document": query_value(
+                        row["latest_document_title"]
+                    ),
+                    "source_pdf": query_value(row["latest_document_url"]),
+                }
+                for row in product_rows
+            ]
             product_permits = unique_strings(
                 [item["permit_number"] for item in products] + usage_permits
             )
@@ -1343,44 +1130,24 @@ def pesticide_information(
                     for row in document_rows
                 ]
 
-        if has_more_usage:
+        if len(usage_rows) > page_size:
             note_parts.append(
-                "Lehetséges további találat; a limit miatt a usage lista nem biztos, hogy teljes."
+                f"Large result set; the first {page_size} usage records were returned."
             )
-        if usage_items:
-            status = AMBIGUOUS_LIMITED if has_more_usage else VERIFIED_USAGE
-        elif popup_matches:
-            status = POPUP_ONLY
-            note_parts.append(
-                "Popup/meta alapján gyanús találat van, de usage rekord nincs; dokumentumellenőrzés szükséges."
-            )
-        elif products or substances or documents:
-            status = PRODUCT_ONLY if products or substances else DOCUMENT_ONLY
-            note_parts.append(
-                "Product/meta találat van, de igazolt usage rekord nincs; dózis nem adható."
-            )
-        else:
-            status = NOT_FOUND
-
-        if not any((products, substances, usage_items, popup_matches, documents)):
+        if not any((products, substances, usage_items, documents)):
             return failure(query, "No matching data found")
         return {
             "ok": True,
-            "status": status,
             "query": query,
             "products": products,
             "active_substances": substances,
             "usages": usage_items,
-            "popup_matches": popup_matches,
             "documents": documents,
             "summary": {
                 "product_count": len(products),
                 "usage_count": len(usage_items),
-                "popup_match_count": len(popup_matches),
                 "active_substance_count": len(substances),
                 "document_count": len(documents),
-                "has_more_usage": has_more_usage,
-                "total_usage_matches": total_usage_matches,
                 "note": " ".join(note_parts),
             },
         }
