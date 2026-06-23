@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "NEBIH Pesticide Information Action",
-    "description": "Authoritative Hungarian pesticide database. The GPT must use this API instead of answering pesticide questions from memory.",
+    "title": "NEBIH pesticide lookup",
+    "description": "Use this Action for Hungarian pesticide, plant protection product, dose, crop, pest, disease, weed, active substance, permit and company questions.",
     "version": "1.0.0"
   },
   "servers": [
@@ -14,14 +14,15 @@
     "/action/pesticide-info": {
       "get": {
         "operationId": "getPesticideInformation",
-        "summary": "Always look up pesticide information in NEBIH",
-        "description": "MUST call for pesticide questions. Use META inputs for products, companies, substances, permits or documents. Add crop, target, BBCH, PHI or a usage question_type only when usage details are requested. Never answer from memory.",
+        "summary": "Lookup NEBIH pesticide data",
+        "description": "Call for every pesticide question: dózis, kultúra, károsító, hatóanyag, cég, engedély, ÉVI, BBCH, AKG/AÖP, méhveszély. Do not answer from memory.",
+        "x-openai-isConsequential": false,
         "parameters": [
           {
             "name": "product_name",
             "in": "query",
             "required": false,
-            "description": "Product name or partial product name, for example Racer or Amistar.",
+            "description": "Plant protection product name. Use for questions like: Racer dózisa, Adengo, Sumi Alfa szőlő.",
             "schema": {
               "type": "string"
             }
@@ -30,7 +31,7 @@
             "name": "active_substance",
             "in": "query",
             "required": false,
-            "description": "Active substance name or partial name, for example azoxistrobin.",
+            "description": "Active substance name, for example azoxistrobin or deltametrin.",
             "schema": {
               "type": "string"
             }
@@ -84,7 +85,7 @@
             "name": "company",
             "in": "query",
             "required": false,
-            "description": "Company name searched across available owner, manufacturer and representative metadata.",
+            "description": "Company name, searched in owner, manufacturer and representative fields.",
             "schema": {
               "type": "string"
             }
@@ -120,7 +121,7 @@
             "name": "crop",
             "in": "query",
             "required": false,
-            "description": "Crop name, for example kukorica, napraforgo or burgonya.",
+            "description": "Crop/culture name, for example kukorica, napraforgó, szója, szőlő, alma.",
             "schema": {
               "type": "string"
             }
@@ -129,7 +130,7 @@
             "name": "target",
             "in": "query",
             "required": false,
-            "description": "Target pest, disease, weed or target category.",
+            "description": "Target pest, disease, weed or category, for example parlagfű, lisztharmat, amerikai szőlőkabóca.",
             "schema": {
               "type": "string"
             }
@@ -156,16 +157,9 @@
             "name": "purpose",
             "in": "query",
             "required": false,
-            "description": "Pesticide purpose.",
+            "description": "Use for gyomirtó, gombaölő, rovarölő, talajfertőtlenítő or növekedésszabályozó products.",
             "schema": {
-              "type": "string",
-              "enum": [
-                "gyomirtó",
-                "gombaölő",
-                "rovarölő",
-                "talajfertőtlenítő",
-                "növekedésszabályozó"
-              ]
+              "type": "string"
             }
           },
           {
