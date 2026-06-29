@@ -27,6 +27,10 @@ def fold_text(value: object) -> str:
     return "".join(char for char in normalized if not unicodedata.combining(char))
 
 
+def compact_fold_text(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", fold_text(value))
+
+
 def normalize_permit_number(value: str) -> str:
     return re.sub(r"\s+", "", value).replace(".", "/").strip("/")
 
@@ -38,6 +42,7 @@ def connect() -> sqlite3.Connection:
     connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     connection.create_function("fold", 1, fold_text, deterministic=True)
+    connection.create_function("compact_fold", 1, compact_fold_text, deterministic=True)
     connection.execute("PRAGMA query_only = ON")
     return connection
 

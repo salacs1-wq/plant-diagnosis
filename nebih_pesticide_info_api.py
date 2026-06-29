@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
-from nebih_api import connect, fold_text, normalize_permit_number
+from nebih_api import compact_fold_text, connect, fold_text, normalize_permit_number
 from nebih_actions_api import parse_limit, range_text, string_range, text
 
 
@@ -15,16 +15,54 @@ router = APIRouter(prefix="/action", tags=["NEBIH Pesticide Information"])
 
 COMPANY_METADATA_PATH = Path(__file__).resolve().parent / "nebih_company_metadata.csv"
 USAGE_SUPPLEMENT_PATH = Path(__file__).resolve().parent / "nebih_usage_supplement.csv"
+VERIFIED_USAGE_SUPPLEMENT_PATH = (
+    Path(__file__).resolve().parent / "nebih_usage_supplement_verified.csv"
+)
 PERMIT_KEY = "replace(replace(trim({column}), ' ', ''), '.', '/')"
 TARGET_CATEGORY_ALIASES = {
     "parlagfu": ["ketsziku", "gyom"],
+    "parlagfu ellen": ["ketsziku", "gyom"],
+    "ambrozia": ["ketsziku", "gyom"],
+    "ambrosia artemisiifolia": ["ketsziku", "gyom"],
+    "amerikai szolokaboca": ["kaboca"],
+    "scaphoideus titanus": ["kaboca"],
+    "szoloperonoszpora": ["peronoszpora"],
+    "szololisztharmat": ["lisztharmat"],
+    "botritisz": ["szurkepenesz"],
 }
 IGNORED_TARGET_WORDS = {"a", "az", "es", "ellen", "illetve", "valamint"}
 USAGE_QUESTION_TYPES = {"dose", "usage", "phi", "recommendation"}
+CROP_QUERY_ALIASES = {
+    "alma": ["alma", "almatermesu"],
+    "korte": ["korte", "almatermesu"],
+    "birs": ["birs", "almatermesu"],
+    "naspolya": ["naspolya", "almatermesu"],
+    "almatermesu": ["alma", "korte", "birs", "naspolya", "almatermesu"],
+    "almatermesuek": ["alma", "korte", "birs", "naspolya", "almatermesu"],
+    "almastermesu": ["alma", "korte", "birs", "naspolya", "almatermesu"],
+    "almastermesuek": ["alma", "korte", "birs", "naspolya", "almatermesu"],
+    "szolo": ["szolo", "borszolo", "csemegeszolo"],
+    "borszolo": ["szolo", "borszolo"],
+    "csemegeszolo": ["szolo", "csemegeszolo"],
+    "kaposzta": ["kaposzta", "kaposztafele"],
+    "karfiol": ["karfiol", "kaposztafele"],
+    "brokkoli": ["brokkoli", "kaposztafele"],
+    "kelbimbo": ["kelbimbo", "kaposztafele"],
+    "kelkaposzta": ["kelkaposzta", "kaposztafele"],
+    "karalabe": ["karalabe", "kaposztafele"],
+}
 
 
 def query_value(value: Any) -> str:
     return text(value).strip()
+
+
+def clean_dose_unit(dose: Any, unit: Any) -> str:
+    dose_text = query_value(dose).casefold()
+    unit_text = query_value(unit)
+    if unit_text and unit_text.casefold() in dose_text:
+        return ""
+    return unit_text
 
 
 @lru_cache(maxsize=1)
@@ -49,10 +87,13 @@ def company_value(product_name: Any, permit_number: Any, field: str) -> str:
 
 @lru_cache(maxsize=1)
 def usage_supplements() -> list[dict[str, str]]:
-    if not USAGE_SUPPLEMENT_PATH.is_file():
-        return []
-    with USAGE_SUPPLEMENT_PATH.open(encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
+    rows: list[dict[str, str]] = []
+    for path in (USAGE_SUPPLEMENT_PATH, VERIFIED_USAGE_SUPPLEMENT_PATH):
+        if not path.is_file():
+            continue
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            rows.extend(csv.DictReader(handle))
+    return rows
 
 
 def register_company_functions(connection: Any) -> None:
@@ -94,12 +135,25 @@ def parse_number(value: str | None, name: str) -> int | None:
     return int(match.group())
 
 
+def parse_offset(value: str | None) -> int:
+    if value is None or not value.strip():
+        return 0
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise ValueError("offset must be an integer.") from error
+    if parsed < 0:
+        raise ValueError("offset must be 0 or greater.")
+    return parsed
+
+
 def empty_summary(note: str = "") -> dict[str, Any]:
     return {
         "product_count": 0,
         "usage_count": 0,
         "active_substance_count": 0,
         "document_count": 0,
+        "status": "NOT_FOUND",
         "note": note,
     }
 
@@ -137,8 +191,35 @@ def failure(query: dict[str, str], error: Exception | str) -> dict[str, Any]:
     }
 
 
+def response_status(
+    *,
+    products: list[dict[str, Any]],
+    substances: list[dict[str, Any]],
+    usages: list[dict[str, Any]],
+    documents: list[dict[str, Any]],
+    limited: bool = False,
+    popup_only: bool = False,
+) -> str:
+    if limited:
+        return "AMBIGUOUS_LIMITED"
+    if usages:
+        return "VERIFIED_USAGE"
+    if popup_only:
+        return "POPUP_ONLY"
+    if documents and not products and not substances:
+        return "DOCUMENT_ONLY"
+    if products or substances:
+        return "PRODUCT_ONLY"
+    return "NOT_FOUND"
+
+
 def unique_strings(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value for value in values if value))
+
+
+def compact_contains(value: Any, term: str) -> bool:
+    compact_term = compact_fold_text(term)
+    return bool(compact_term and compact_term in compact_fold_text(query_value(value)))
 
 
 def numeric_bbch(value: Any) -> int | None:
@@ -146,18 +227,78 @@ def numeric_bbch(value: Any) -> int | None:
     return int(match.group()) if match else None
 
 
+def crop_alias_terms(search: str) -> list[str]:
+    term = fold_text(search)
+    if "napraforgo" in term:
+        return ["napraforgo"]
+    if term in CROP_QUERY_ALIASES:
+        return CROP_QUERY_ALIASES[term]
+    return [term]
+
+
+def crop_sql_filter(column: str, search: str) -> tuple[str, list[str]]:
+    term = fold_text(search)
+    if "napraforgo" in term:
+        sql = f"fold({column}) LIKE '%napraforgo%'"
+        if "hagyomanyos" in term:
+            sql += (
+                f" AND fold({column}) NOT LIKE '%imisun%'"
+                f" AND fold({column}) NOT LIKE '%imidazolinon%'"
+                f" AND fold({column}) NOT LIKE '%express%'"
+                f" AND fold({column}) NOT LIKE '%rezisztens%'"
+                f" AND fold({column}) NOT LIKE '%tolerans%'"
+            )
+        return f"({sql})", []
+    terms = crop_alias_terms(search)
+    return (
+        "("
+        + " OR ".join(
+            f"(fold({column}) LIKE ? OR compact_fold({column}) LIKE ?)"
+            for _ in terms
+        )
+        + ")",
+        [
+            value
+            for alias in terms
+            for value in (f"%{alias}%", f"%{compact_fold_text(alias)}%")
+        ],
+    )
+
+
 def crop_matches(value: Any, search: str) -> bool:
     crop = fold_text(query_value(value))
     term = fold_text(search)
     if not crop or not term:
         return False
-    apple_terms = {"alma", "almatermesu", "almatermesuek", "almastermesu", "almastermesuek"}
-    if term in apple_terms:
+    if "napraforgo" in term:
+        if "napraforgo" not in crop:
+            return False
+        if "hagyomanyos" in term:
+            excluded = ("imisun", "imidazolinon", "express", "rezisztens", "tolerans")
+            return not any(word in crop for word in excluded)
+        return True
+    if term == "alma":
         return bool(
             re.search(r"(?<![a-z0-9(])alma(?![a-z0-9])", crop)
             or re.search(r"(?<![a-z0-9])almatermesu", crop)
         )
+    if term in {"almatermesu", "almatermesuek", "almastermesu", "almastermesuek"}:
+        return bool(
+            re.search(r"(?<![a-z0-9])almatermesu", crop)
+            or re.search(r"(?<![a-z0-9(])alma(?![a-z0-9])", crop)
+            or re.search(r"(?<![a-z0-9(])korte(?![a-z0-9])", crop)
+            or re.search(r"(?<![a-z0-9(])birs(?![a-z0-9])", crop)
+            or re.search(r"(?<![a-z0-9(])naspolya(?![a-z0-9])", crop)
+        )
+    for alias in crop_alias_terms(search):
+        if alias and (
+            re.search(rf"(?<![a-z0-9]){re.escape(alias)}", crop)
+            or compact_contains(value, alias)
+        ):
+            return True
     if crop == term or crop.startswith(term):
+        return True
+    if compact_contains(value, term):
         return True
     return bool(
         re.search(
@@ -179,6 +320,7 @@ def supplement_usage_item(row: dict[str, str], bbch_query: int | None) -> dict[s
             if low is None or high is None
             else "match" if low <= bbch_query <= high else "no_match"
         )
+    dose = row["dose"]
     return {
         "product_name": row["product_name"],
         "permit_number": row["permit_number"],
@@ -193,14 +335,15 @@ def supplement_usage_item(row: dict[str, str], bbch_query: int | None) -> dict[s
         "crop": row["crop"],
         "target": row["target"],
         "purpose": row["purpose"],
-        "dose": row["dose"],
-        "dose_unit": row["dose_unit"],
+        "dose": dose,
+        "dose_unit": clean_dose_unit(dose, row["dose_unit"]),
         "bbch": string_range(row["bbch_min"], row["bbch_max"]),
         "bbch_match": bbch_match,
         "treatment_time": row["treatment_time"],
         "phi": row["phi"],
         "max_treatments": row["max_treatments"],
         "min_interval_days": row["min_interval_days"],
+        "verification_status": "VERIFIED_USAGE",
         "expiry_date": row["expiry_date"],
         "latest_document": row["latest_document"],
         "source_pdf": row["source_pdf"],
@@ -232,7 +375,8 @@ def supplement_matches(
     if query["crop"] and not crop_matches(row["crop"], query["crop"]):
         return False
     if target_terms and not all(
-        fold_text(term) in fold_text(row["target"]) for term in target_terms
+        fold_text(term) in fold_text(row["target"]) or compact_contains(row["target"], term)
+        for term in target_terms
     ):
         return False
     if query["purpose"] and fold_text(query["purpose"]) not in fold_text(row["purpose"]):
@@ -284,17 +428,50 @@ def usage_item(row: Any, bbch_query: int | None) -> dict[str, str]:
         "target": query_value(row["target"]),
         "purpose": query_value(row["purpose"]),
         "dose": dose,
-        "dose_unit": query_value(row["dose_unit"]),
+        "dose_unit": clean_dose_unit(dose, row["dose_unit"]),
         "bbch": string_range(row["bbch_min"], row["bbch_max"]),
         "bbch_match": bbch_match,
         "treatment_time": query_value(row["treatment_time"]),
         "phi": phi,
         "max_treatments": query_value(row["max_treatments"]),
         "min_interval_days": query_value(row["min_interval_days"]),
+        "verification_status": "VERIFIED_USAGE",
         "expiry_date": query_value(row["expiry_date"]),
         "latest_document": query_value(row["latest_document"]),
         "source_pdf": query_value(row["source_pdf"]),
     }
+
+
+def dedupe_usage_items(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[tuple[str, ...]] = set()
+    unique: list[dict[str, str]] = []
+    # Audited point-4 rows that preserve a compound dose verbatim intentionally
+    # have no separate unit. Prefer them over an older parser row for the same
+    # permit/crop/target/timing combination.
+    ordered_items = sorted(
+        items,
+        key=lambda item: (
+            not (bool(item["dose"]) and not bool(item["dose_unit"])),
+            fold_text(item["product_name"]),
+            item["permit_number"],
+            fold_text(item["crop"]),
+            fold_text(item["target"]),
+        ),
+    )
+    for item in ordered_items:
+        key = (
+            fold_text(item["product_name"]),
+            fold_text(item["crop"]),
+            fold_text(item["target"]),
+            item["bbch"],
+            item["phi"],
+            item["max_treatments"],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
 
 
 def placeholders(values: list[Any]) -> str:
@@ -318,6 +495,9 @@ def product_item(row: Any) -> dict[str, Any]:
         "aop1_bee_allowed": bool(row["aop1_bee_allowed"]),
         "organic_allowed": bool(row["organic_allowed"]),
         "bee_risk": query_value(row["bee_risk"]),
+        "verification_status": query_value(
+            row["verification_status"] if "verification_status" in row.keys() else "PRODUCT_ONLY"
+        ),
         "latest_document": query_value(row["latest_document_title"]),
         "source_pdf": query_value(row["latest_document_url"]),
     }
@@ -516,6 +696,12 @@ def meta_search(
             "usage_count": 0,
             "active_substance_count": len(substances),
             "document_count": len(documents),
+            "status": response_status(
+                products=products,
+                substances=substances,
+                usages=[],
+                documents=documents,
+            ),
             "note": "META search; usage data was not queried.",
         },
     }
@@ -537,17 +723,50 @@ def target_search(
         ]
         if len(tokens) > 1:
             alternatives.append((tokens, False))
-        if folded in TARGET_CATEGORY_ALIASES:
-            alternatives.append((TARGET_CATEGORY_ALIASES[folded], True))
+        for alias, words in TARGET_CATEGORY_ALIASES.items():
+            if alias in folded:
+                alternatives.append((words, True))
         alternative_sql: list[str] = []
         for words, is_broader in alternatives:
             alternative_sql.append(
-                "(" + " AND ".join("fold(u.target) LIKE ?" for _ in words) + ")"
+                "("
+                + " AND ".join(
+                    "(fold(u.target) LIKE ? OR compact_fold(u.target) LIKE ?)"
+                    for _ in words
+                )
+                + ")"
             )
-            parameters.extend(f"%{word}%" for word in words)
+            for word in words:
+                parameters.extend([f"%{word}%", f"%{compact_fold_text(word)}%"])
             broader_category_used = broader_category_used or is_broader
         groups.append("(" + " OR ".join(alternative_sql) + ")")
     return "(" + " OR ".join(groups) + ")", parameters, broader_category_used
+
+
+def popup_target_search(
+    terms: list[str],
+) -> tuple[str, list[str], bool]:
+    sql, parameters, broader = target_search(terms)
+    return (
+        sql.replace("fold(u.target)", "fold(p.target_raw)").replace(
+            "compact_fold(u.target)", "compact_fold(p.target_raw)"
+        ),
+        parameters,
+        broader,
+    )
+
+
+def exact_target_present(items: list[dict[str, str]], terms: list[str]) -> bool:
+    exact_terms = [fold_text(term) for term in terms if term]
+    if not exact_terms:
+        return False
+    return any(
+        any(
+            term in fold_text(item["target"]) or compact_contains(item["target"], term)
+            for term in exact_terms
+        )
+        for item in items
+    )
 
 
 @router.get("/pesticide-info", operation_id="getPesticideInformation")
@@ -574,7 +793,8 @@ def pesticide_information(
     aop1_bee_allowed: str | None = Query(default=None),
     organic_allowed: str | None = Query(default=None),
     question_type: str | None = Query(default="general"),
-    limit: str | None = Query(default="20"),
+    limit: str | None = Query(default="50"),
+    offset: str | None = Query(default="0"),
 ) -> dict[str, Any]:
     query = response_query(
         product_name=product_name,
@@ -602,7 +822,8 @@ def pesticide_information(
     )
     query["query_type"] = query_route(query)
     try:
-        page_size = parse_limit(limit, default=20, maximum=50)
+        page_size = parse_limit(limit, default=50, maximum=200)
+        page_offset = parse_offset(offset)
         if not any(
             query[key]
             for key in (
@@ -661,13 +882,20 @@ def pesticide_information(
                     SELECT DISTINCT product_name
                     FROM permit_index
                     WHERE fold(product_name) LIKE ?
+                       OR fold(reference_product_name) LIKE ?
                     UNION
                     SELECT DISTINCT product_name
                     FROM usage
                     WHERE fold(product_name) LIKE ?
+                       OR fold(reference_product_name) LIKE ?
                     ORDER BY product_name
                     """,
-                    (f"%{folded_name}%", f"%{folded_name}%"),
+                    (
+                        f"%{folded_name}%",
+                        f"%{folded_name}%",
+                        f"%{folded_name}%",
+                        f"%{folded_name}%",
+                    ),
                 ).fetchall()
                 resolved_names = [fold_text(row["product_name"]) for row in rows]
 
@@ -711,21 +939,9 @@ def pesticide_information(
                 usage_clauses.append("fold(u.permit_type) LIKE ?")
                 usage_parameters.append(f"%{fold_text(query['permit_type'])}%")
             if query["crop"]:
-                crop_term = fold_text(query["crop"])
-                if crop_term in {
-                    "alma",
-                    "almatermesu",
-                    "almatermesuek",
-                    "almastermesu",
-                    "almastermesuek",
-                }:
-                    usage_clauses.append(
-                        "(fold(u.crop) LIKE '%alma%' "
-                        "OR fold(u.crop) LIKE '%almatermesu%')"
-                    )
-                else:
-                    usage_clauses.append("fold(u.crop) LIKE ?")
-                    usage_parameters.append(f"%{crop_term}%")
+                crop_sql, crop_parameters = crop_sql_filter("u.crop", query["crop"])
+                usage_clauses.append(crop_sql)
+                usage_parameters.extend(crop_parameters)
             if target_terms:
                 target_sql, target_parameters, broader_target = target_search(
                     target_terms
@@ -807,7 +1023,7 @@ def pesticide_information(
                 if usage_clauses
                 else ""
             )
-            candidate_limit = min(max(page_size * 10, 100), 500)
+            candidate_limit = min(max(page_size * 10, 200), 2000)
             usage_rows = connection.execute(
                 f"""
                 WITH permits AS (
@@ -918,6 +1134,13 @@ def pesticide_information(
                 )
                 not in existing_keys
             )
+            usage_items = dedupe_usage_items(usage_items)
+            if exact_target_present(usage_items, target_terms):
+                note_parts = [
+                    note
+                    for note in note_parts
+                    if "broader weed category" not in note
+                ]
             if query["crop"]:
                 usage_items = [
                     item
@@ -943,10 +1166,112 @@ def pesticide_information(
                     )
                 else:
                     usage_items = []
-            usage_items = usage_items[:page_size]
+            total_usage_items = len(usage_items)
+            usage_items = usage_items[page_offset : page_offset + page_size]
             usage_permits = unique_strings(
                 [item["permit_number"] for item in usage_items]
             )
+            popup_product_permits: list[str] = []
+            if not usage_items and (query["crop"] or target_terms):
+                popup_clauses: list[str] = []
+                popup_parameters: list[Any] = []
+                if resolved_names:
+                    popup_clauses.append(
+                        f"fold(p.product_name) IN ({placeholders(resolved_names)})"
+                    )
+                    popup_parameters.extend(resolved_names)
+                elif query["product_name"]:
+                    popup_clauses.append("fold(p.product_name) LIKE ?")
+                    popup_parameters.append(f"%{fold_text(query['product_name'])}%")
+                if active_permits:
+                    popup_clauses.append(
+                        f"p.permit_number IN ({placeholders(active_permits)})"
+                    )
+                    popup_parameters.extend(active_permits)
+                elif query["active_substance"]:
+                    popup_clauses.append("0 = 1")
+                if query["permit_number"]:
+                    popup_clauses.append(
+                        f"{PERMIT_KEY.format(column='p.permit_number')} LIKE ?"
+                    )
+                    popup_parameters.append(
+                        f"%{normalize_permit_number(query['permit_number'])}%"
+                    )
+                if query["permit_type"]:
+                    popup_clauses.append("fold(p.permit_type) LIKE ?")
+                    popup_parameters.append(f"%{fold_text(query['permit_type'])}%")
+                if query["crop"]:
+                    crop_sql, crop_parameters = crop_sql_filter(
+                        "p.crop_raw", query["crop"]
+                    )
+                    popup_clauses.append(crop_sql)
+                    popup_parameters.extend(crop_parameters)
+                if target_terms:
+                    popup_target_sql, popup_target_parameters, broader_target = (
+                        popup_target_search(target_terms)
+                    )
+                    popup_clauses.append(popup_target_sql)
+                    popup_parameters.extend(popup_target_parameters)
+                    if broader_target:
+                        note_parts.append(
+                            "Popup/meta scope was checked with a broader target category."
+                        )
+                if query["purpose"]:
+                    popup_clauses.append("fold(p.purpose) LIKE ?")
+                    popup_parameters.append(f"%{fold_text(query['purpose'])}%")
+                if query["company"]:
+                    popup_clauses.append(
+                        """
+                        (
+                            fold(coalesce(nullif(p.owner_name, ''), p.owner, '')) LIKE ?
+                            OR fold(company_manufacturer(
+                                p.product_name, p.permit_number
+                            )) LIKE ?
+                            OR fold(company_representative(
+                                p.product_name, p.permit_number
+                            )) LIKE ?
+                        )
+                        """
+                    )
+                    company_term = f"%{fold_text(query['company'])}%"
+                    popup_parameters.extend([company_term] * 3)
+                if query["owner"]:
+                    popup_clauses.append(
+                        "fold(coalesce(nullif(p.owner_name, ''), p.owner, '')) LIKE ?"
+                    )
+                    popup_parameters.append(f"%{fold_text(query['owner'])}%")
+                if query["manufacturer"]:
+                    popup_clauses.append(
+                        "fold(company_manufacturer(p.product_name, p.permit_number)) LIKE ?"
+                    )
+                    popup_parameters.append(f"%{fold_text(query['manufacturer'])}%")
+                if query["representative"]:
+                    popup_clauses.append(
+                        "fold(company_representative(p.product_name, p.permit_number)) LIKE ?"
+                    )
+                    popup_parameters.append(f"%{fold_text(query['representative'])}%")
+                popup_where = (
+                    " WHERE " + " AND ".join(popup_clauses)
+                    if popup_clauses
+                    else " WHERE 0 = 1"
+                )
+                popup_rows = connection.execute(
+                    f"""
+                    SELECT DISTINCT p.permit_number
+                    FROM permit_index AS p
+                    {popup_where}
+                    ORDER BY p.permit_number
+                    LIMIT ?
+                    """,
+                    [*popup_parameters, page_size],
+                ).fetchall()
+                popup_product_permits = unique_strings(
+                    [query_value(row["permit_number"]) for row in popup_rows]
+                )
+                if popup_product_permits:
+                    note_parts.append(
+                        "No verified usage row matched, but popup/meta scope matched; document check is required before giving dose, BBCH, PHI or treatment count."
+                    )
 
             product_identity_clauses: list[str] = []
             product_filter_clauses: list[str] = []
@@ -966,6 +1291,11 @@ def pesticide_information(
                     f"permit_number IN ({placeholders(usage_permits)})"
                 )
                 product_parameters.extend(usage_permits)
+            if popup_product_permits:
+                product_identity_clauses.append(
+                    f"permit_number IN ({placeholders(popup_product_permits)})"
+                )
+                product_parameters.extend(popup_product_permits)
             if query["purpose"]:
                 product_filter_clauses.append("fold(purpose) LIKE ?")
                 product_parameters.append(f"%{fold_text(query['purpose'])}%")
@@ -1062,6 +1392,13 @@ def pesticide_information(
                     "aop1_bee_allowed": bool(row["aop1_bee_allowed"]),
                     "organic_allowed": bool(row["organic_allowed"]),
                     "bee_risk": query_value(row["bee_risk"]),
+                    "verification_status": (
+                        "VERIFIED_USAGE"
+                        if query_value(row["permit_number"]) in usage_permits
+                        else "POPUP_ONLY"
+                        if query_value(row["permit_number"]) in popup_product_permits
+                        else "PRODUCT_ONLY"
+                    ),
                     "latest_document": query_value(
                         row["latest_document_title"]
                     ),
@@ -1130,10 +1467,19 @@ def pesticide_information(
                     for row in document_rows
                 ]
 
-        if len(usage_rows) > page_size:
+        total_usage_items = locals().get("total_usage_items", len(usage_items))
+        candidate_truncated = len(locals().get("usage_rows", [])) >= locals().get(
+            "candidate_limit", page_size + 1
+        )
+        has_more = page_offset + page_size < total_usage_items or candidate_truncated
+        if has_more:
+            next_offset = page_offset + page_size
             note_parts.append(
-                f"Large result set; the first {page_size} usage records were returned."
+                f"Large result set; returned {len(usage_items)} usage records "
+                f"from offset {page_offset}. Use offset={next_offset} for the next page."
             )
+        else:
+            next_offset = None
         if not any((products, substances, usage_items, documents)):
             return failure(query, "No matching data found")
         return {
@@ -1146,8 +1492,21 @@ def pesticide_information(
             "summary": {
                 "product_count": len(products),
                 "usage_count": len(usage_items),
+                "total_usage_count": total_usage_items,
+                "limit": page_size,
+                "offset": page_offset,
+                "has_more": has_more,
+                "next_offset": next_offset,
                 "active_substance_count": len(substances),
                 "document_count": len(documents),
+                "status": response_status(
+                    products=products,
+                    substances=substances,
+                    usages=usage_items,
+                    documents=documents,
+                    limited=has_more,
+                    popup_only=bool(popup_product_permits),
+                ),
                 "note": " ".join(note_parts),
             },
         }

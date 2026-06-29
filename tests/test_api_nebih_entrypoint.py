@@ -3,7 +3,7 @@ import sys
 
 from fastapi.testclient import TestClient
 
-from nebih_api import app
+from nebih_api import app, fold_text
 
 
 client = TestClient(app)
@@ -309,6 +309,7 @@ def test_pesticide_info_corteva_apple() -> None:
         "Fontelis 20 SC",
         "Laser",
         "Laser Duplo (er.név: Spin Tor)",
+        "Nexsuba",
     }
     assert not any(
         item["product_name"] == "Closer 120 SC" for item in payload["usages"]
@@ -329,6 +330,7 @@ def test_pesticide_info_corteva_pome_fruit_alias() -> None:
             "Fontelis 20 SC",
             "Laser",
             "Laser Duplo (er.név: Spin Tor)",
+            "Nexsuba",
         }
 
 
@@ -596,3 +598,1112 @@ def test_pesticide_info_permit_metadata_filters() -> None:
     assert payload["query"]["query_type"] == "META"
     assert payload["products"]
     assert payload["usages"] == []
+
+
+def test_pesticide_info_decis_forte_returns_full_verified_usage_scope() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Decis Forte",
+            "question_type": "usage",
+            "limit": 100,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 60
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Decis Forte",
+        "Detector",
+        "NUYARD",
+    }
+    assert all(
+        item["verification_status"] == "VERIFIED_USAGE"
+        for item in payload["usages"]
+    )
+
+
+def test_pesticide_info_adengo_dose_is_verified_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Adengo",
+            "question_type": "dose",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["usages"]
+    assert {
+        (
+            fold_text(item["crop"]),
+            item["dose"],
+            item["dose_unit"],
+            item["verification_status"],
+        )
+        for item in payload["usages"]
+    } == {
+        ("kukorica (szemes, silo, vetomag)", "0.33-0.44", "l/ha", "VERIFIED_USAGE")
+    }
+
+
+def test_pesticide_info_sunflower_ragweed_uses_verified_broader_category() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "crop": "hagyomanyos napraforgo",
+            "target": "parlagfu",
+            "purpose": "gyomirto",
+            "bbch": 14,
+            "question_type": "recommendation",
+            "limit": 100,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert {fold_text(item["product_name"]) for item in payload["usages"]} == {
+        "fox (er.nev: modown 4 f)",
+        "viballa",
+    }
+    assert all(item["bbch_match"] == "match" for item in payload["usages"])
+    assert all(
+        item["verification_status"] == "VERIFIED_USAGE"
+        for item in payload["usages"]
+    )
+
+
+def test_pesticide_info_sumi_alfa_grape_leafhopper_small_use_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Sumi Alfa 5 EC",
+            "crop": "szolo",
+            "target": "amerikai szolokaboca",
+            "question_type": "usage",
+            "limit": 20,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 3
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Sumi Alfa 5 EC",
+        "Sumi-Alpha 050 EC",
+        "Wizard",
+    }
+    assert payload["usages"][0]["dose"] == "0.2-0.3"
+    assert payload["usages"][0]["dose_unit"] == "l/ha"
+    assert payload["usages"][0]["bbch"] == "55-79"
+    assert payload["usages"][0]["phi"] == "7"
+    assert payload["usages"][0]["max_treatments"] == "2"
+    assert payload["usages"][0]["verification_status"] == "VERIFIED_USAGE"
+
+
+def test_pesticide_info_karate_grape_leafhopper_includes_reference_products() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Karate Zeon 5 CS",
+            "crop": "szolo",
+            "target": "amerikai szolokaboca",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 12
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Full 5 CS",
+        "Karate Zeon",
+        "Karate Zeon 050 CS",
+        "Karate Zeon 5 CS",
+        "Kendo 5 CS",
+        "Ninja Zeon 5 CS",
+    }
+    assert all(item["dose"] == "0.25" for item in payload["usages"])
+    assert all(item["dose_unit"] == "l/ha" for item in payload["usages"])
+
+
+def test_pesticide_info_mospilan_grape_leafhopper_includes_reference_products() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Mospilan 20 SG",
+            "crop": "szolo",
+            "target": "amerikai szolokaboca",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 6
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Gazelle 20 SG",
+        "Mospilan 20 SG",
+        "Mospilan 20 SG Original",
+        "Mospilan SG",
+        "Rafting",
+        "Spilan 20 SG",
+    }
+    assert all(item["dose"] == "0.25-0.375" for item in payload["usages"])
+    assert all(item["dose_unit"] == "kg/ha" for item in payload["usages"])
+
+
+def test_pesticide_info_coragen_grape_moths_includes_reference_products() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Coragen 20 SC",
+            "crop": "szolo",
+            "target": "szolomolyok",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 9
+    assert "Coragen 20 SC" in {item["product_name"] for item in payload["usages"]}
+    assert "Voliam" in {item["product_name"] for item in payload["usages"]}
+    assert all(item["dose"] == "150-175" for item in payload["usages"])
+    assert all(item["dose_unit"] == "ml/ha" for item in payload["usages"])
+    assert all(item["phi"] == "30" for item in payload["usages"])
+
+
+def test_pesticide_info_benevia_greenhouse_pepper_small_use_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Benevia",
+            "crop": "paprika",
+            "target": "uveghazi molytetu",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["crop"] == "paprika (hajtatott)"
+    assert usage["dose"] == "0.75"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["phi"] == "1"
+    assert usage["bbch"] == "12-89"
+    assert usage["max_treatments"] == "4"
+
+
+def test_pesticide_info_benevia_greenhouse_cucumber_thrips_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Benevia",
+            "crop": "uborka",
+            "target": "dohanytripsz",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["crop"] == "uborka (hajtatott)"
+    assert usage["dose"] == "75-100"
+    assert usage["dose_unit"] == "ml/hl"
+    assert usage["phi"] == "1"
+    assert usage["bbch"] == "12-89"
+
+
+def test_pesticide_info_benevia_strawberry_spotted_wing_drosophila_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Benevia",
+            "crop": "szamoca",
+            "target": "foltosszarnyu muslica",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["crop"] == "szamóca (hajtatott)"
+    assert usage["dose"] == "75-100"
+    assert usage["dose_unit"] == "ml/hl"
+    assert usage["phi"] == "1"
+    assert usage["bbch"] == "12-89"
+
+
+def test_pesticide_info_deltam_onion_aphids_small_use_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Deltam",
+            "crop": "voroshagyma",
+            "target": "leveltetvek",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["crop"] == "Vöröshagyma"
+    assert usage["target"] == "levéltetvek"
+    assert usage["dose"] == "8"
+    assert usage["dose_unit"] == "ml/100m2"
+    assert usage["bbch"] == "45"
+
+
+def test_pesticide_info_deltam_cucumber_whiteflies_small_use_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Deltam",
+            "crop": "uborka",
+            "target": "liszteskek",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert "uborka" in usage["crop"].casefold()
+    assert "liszteskék" in usage["target"]
+    assert usage["dose"] == "5"
+    assert usage["dose_unit"] == "ml/100m2"
+    assert usage["bbch"] == "70"
+
+
+def test_pesticide_info_mospilan_sunflower_aphids_includes_reference_products() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Mospilan 20 SG",
+            "crop": "napraforgo",
+            "target": "leveltetvek",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 6
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Gazelle 20 SG",
+        "Mospilan 20 SG",
+        "Mospilan 20 SG Original",
+        "Mospilan SG",
+        "Rafting",
+        "Spilan 20 SG",
+    }
+    assert all(item["crop"] == "napraforgó" for item in payload["usages"])
+    assert all(item["dose"] == "0.15-0.2" for item in payload["usages"])
+    assert all(item["dose_unit"] == "kg/ha" for item in payload["usages"])
+    assert all(item["bbch"] == "40-53" for item in payload["usages"])
+
+
+def test_pesticide_info_gazelle_sunflower_aphids_stays_specific() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Gazelle 20 SG",
+            "crop": "napraforgo",
+            "target": "leveltetvek",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Gazelle 20 SG"
+    assert usage["crop"] == "napraforgó"
+    assert usage["dose"] == "0.15-0.2"
+    assert usage["dose_unit"] == "kg/ha"
+
+
+def test_pesticide_info_deltaphar_leek_aphids_includes_related_products() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Deltaphar 25 EC",
+            "crop": "porehagyma",
+            "target": "leveltetu",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 3
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Deltaphar 25 EC",
+        "Deltathrin",
+        "Splendour",
+    }
+    assert all(item["crop"] == "Póréhagyma" for item in payload["usages"])
+    assert all(item["dose"] == "0.5" for item in payload["usages"])
+    assert all(item["dose_unit"] == "liter/ha" for item in payload["usages"])
+    assert all(item["bbch"] == "12-45" for item in payload["usages"])
+
+
+def test_pesticide_info_scatto_cucumber_whiteflies_includes_deltastar() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Scatto",
+            "crop": "uborka",
+            "target": "liszteskek",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 4
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "DeltaStar",
+        "Scatto",
+    }
+    assert {item["dose"] for item in payload["usages"]} == {"0.1-0.18", "0.3-0.5"}
+    assert all(item["dose_unit"] == "l/ha" for item in payload["usages"])
+
+
+def test_pesticide_info_romble_onion_downy_mildew_includes_related_products() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Romble",
+            "crop": "voroshagyma",
+            "target": "peronoszpora",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 3
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Aster",
+        "AzoMax CB 250 SC",
+        "Romble",
+    }
+    assert all(
+        item["crop"] == "vöröshagyma, fokhagyma, mogyoróhagyma szabadföldi"
+        for item in payload["usages"]
+    )
+    assert all(item["dose"] == "0.75-1" for item in payload["usages"])
+    assert all(item["dose_unit"] == "l/ha" for item in payload["usages"])
+    assert all(item["bbch"] == "14" for item in payload["usages"])
+
+
+def test_pesticide_info_trunfo_carrot_powdery_mildew_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Trunfo",
+            "crop": "sargarepa",
+            "target": "lisztharmat",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Trunfo"
+    assert usage["crop"] == "sárgarépa szabadföldi"
+    assert usage["dose"] == "1"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "16"
+
+
+def test_pesticide_info_leptostar_rape_pollen_beetle_handles_compact_target() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Leptostar 200 SL",
+            "crop": "kaposztarepce",
+            "target": "repcefenybogar",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 2
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Aceptendo 200 SL",
+        "Leptostar 200 SL",
+    }
+    assert all("repce-fénybogár" in item["target"] for item in payload["usages"])
+    assert all(item["dose"] == "0.2-0.3" for item in payload["usages"])
+    assert all(item["dose_unit"] == "l/ha" for item in payload["usages"])
+    assert all(item["bbch"] == "20-59" for item in payload["usages"])
+
+
+def test_pesticide_info_aceptendo_rape_pollen_beetle_stays_specific() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Aceptendo 200 SL",
+            "crop": "kaposztarepce",
+            "target": "repcefenybogar",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Aceptendo 200 SL"
+    assert usage["dose"] == "0.2-0.3"
+    assert usage["dose_unit"] == "l/ha"
+
+
+def test_pesticide_info_roubaix_onion_downy_mildew_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Roubaix",
+            "crop": "voroshagyma",
+            "target": "peronoszpora",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Roubaix"
+    assert "vöröshagyma" in usage["crop"].casefold()
+    assert "peronoszpóra" in usage["target"]
+    assert usage["dose"] == "0.75-1"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "14"
+
+
+def test_pesticide_info_divam_leek_aphids_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Divam Pro",
+            "crop": "porehagyma",
+            "target": "leveltetu",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Divam Pro (er.név: Demetrina 25 EC)"
+    assert usage["crop"] == "Póréhagyma"
+    assert usage["dose"] == "0.5"
+    assert usage["dose_unit"] == "liter/ha"
+    assert usage["bbch"] == "12-45"
+
+
+def test_pesticide_info_laser_duplo_apple_codling_moth_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Laser Duplo",
+            "crop": "alma",
+            "target": "almamoly",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Laser Duplo (er.név: Spin Tor)"
+    assert usage["crop"] == "alma, körte, birs, naspolya"
+    assert usage["dose"] == "0.25"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "15-80"
+
+
+def test_pesticide_info_nexsuba_potato_beetle_inherits_laser_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Nexsuba",
+            "crop": "burgonya",
+            "target": "burgonyabogar",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Nexsuba"
+    assert usage["crop"] == "burgonya"
+    assert usage["dose"] == "0.15"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "48"
+
+
+def test_pesticide_info_teppeki_coriander_handles_hyphenated_crop() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Teppeki",
+            "crop": "koriander",
+            "target": "leveltetu",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 4
+    assert {item["product_name"] for item in payload["usages"]} == {
+        "Afinto",
+        "Hinode",
+        "Teppeki",
+        "Teppeki 50 WG",
+    }
+    assert all("korian- der" in item["crop"] for item in payload["usages"])
+    assert all(item["dose"] == "0.16" for item in payload["usages"])
+    assert all(item["dose_unit"] == "kg/ha" for item in payload["usages"])
+
+
+def test_pesticide_info_coragen_carrot_fly_includes_related_products() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Coragen 20 SC",
+            "crop": "sargarepa",
+            "target": "sargarepalegy",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 9
+    assert "CoragenPro" in {item["product_name"] for item in payload["usages"]}
+    assert all(item["dose"] == "125-150" for item in payload["usages"])
+    assert all(item["dose_unit"] == "ml/ha" for item in payload["usages"])
+    assert all(item["bbch"] == "14-49" for item in payload["usages"])
+
+
+def test_pesticide_info_turex_apple_winter_moth_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Turex WG",
+            "crop": "alma",
+            "target": "kis teliaraszolo",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Turex WG"
+    assert usage["crop"] == "alma, körte"
+    assert usage["dose"] == "1"
+    assert usage["dose_unit"] == "kg/ha"
+    assert usage["bbch"] == "11-87"
+
+
+def test_pesticide_info_dagonis_potato_alternaria_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Dagonis",
+            "crop": "burgonya",
+            "target": "alternarias",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Dagonis"
+    assert usage["crop"] == "burgonya (szabadföldi)"
+    assert usage["dose"] == "0.6-0.75"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "14"
+
+
+def test_pesticide_info_sivanto_parallel_carrot_aphids_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Sivanto Prime 200 SL",
+            "crop": "sargarepa",
+            "target": "leveltetvek",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Sivanto Prime 200 SL"
+    assert usage["crop"] == "sárgarépa"
+    assert usage["dose"] == "0.625"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "14-45"
+
+
+def test_pesticide_info_amistar_top_cabbage_has_recovered_bbch_row() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Amistar Top",
+            "crop": "kaposztafelek",
+            "target": "peronoszpora",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert any(
+        item["product_name"] == "Amistar Top"
+        and item["dose"] == "0.6-1"
+        and item["dose_unit"] == "l/ha"
+        and item["bbch"] == "41"
+        for item in payload["usages"]
+    )
+
+
+def test_pesticide_info_usage_pagination_reports_next_offset() -> None:
+    first = client.get(
+        "/action/pesticide-info",
+        params={
+            "crop": "napraforgo",
+            "target": "parlagfu",
+            "question_type": "usage",
+            "limit": 5,
+        },
+    ).json()
+    second = client.get(
+        "/action/pesticide-info",
+        params={
+            "crop": "napraforgo",
+            "target": "parlagfu",
+            "question_type": "usage",
+            "limit": 5,
+            "offset": 5,
+        },
+    ).json()
+
+    assert first["ok"] is True
+    assert first["summary"]["usage_count"] == 5
+    assert first["summary"]["total_usage_count"] > 5
+    assert first["summary"]["has_more"] is True
+    assert first["summary"]["next_offset"] == 5
+    assert first["summary"]["status"] == "AMBIGUOUS_LIMITED"
+    assert second["ok"] is True
+    assert second["summary"]["offset"] == 5
+    assert second["summary"]["next_offset"] == 10
+    assert [item["product_name"] for item in first["usages"]] != [
+        item["product_name"] for item in second["usages"]
+    ]
+
+
+def test_pesticide_info_cythrin_max_carrot_aphids_inherits_cyperkill_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "CYTHRIN MAX",
+            "crop": "sargarepa",
+            "target": "leveltetvek",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "CYTHRIN MAX"
+    assert usage["dose"] == "50"
+    assert usage["dose_unit"] == "ml/ha"
+    assert usage["bbch"] == "14-49"
+
+
+def test_pesticide_info_pennthiol_carrot_powdery_mildew_inherits_microthiol_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Pennthiol",
+            "crop": "sargarepa",
+            "target": "lisztharmat",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Pennthiol"
+    assert usage["dose"] == "5"
+    assert usage["dose_unit"] == "kg/ha"
+    assert usage["bbch"] == "14"
+
+
+def test_pesticide_info_champion_potato_blight_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Champion WG",
+            "crop": "burgonya",
+            "target": "burgonyavesz",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Champion WG"
+    assert usage["dose"] == "2"
+    assert usage["dose_unit"] == "kg/ha"
+    assert usage["bbch"] == "15"
+
+
+def test_pesticide_info_azbany_carrot_inherits_tazer_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Azbany",
+            "crop": "sargarepa",
+            "target": "lisztharmat",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Azbany"
+    assert usage["dose"] == "1"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "16"
+
+
+def test_pesticide_info_green_doctor_strawberry_inherits_polyversum_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Green Doctor",
+            "crop": "szamoca",
+            "target": "botritisz",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Green Doctor"
+    assert usage["dose"] == "0.1-0.2"
+    assert usage["dose_unit"] == "kg/ha"
+    assert usage["bbch"] == "41"
+
+
+def test_pesticide_info_badge_sc_potato_blight_is_verified() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Badge SC",
+            "crop": "burgonya",
+            "target": "burgonyavesz",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Badge SC"
+    assert usage["dose"] == "2.5-3"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "15"
+
+
+def test_pesticide_info_bolid_cabbage_inherits_makler_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Bolid 250 SE",
+            "crop": "fejes kaposzta",
+            "target": "alternarias",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Bolid 250 SE"
+    assert usage["dose"] == "0.8"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "41"
+
+
+def test_pesticide_info_bactospeine_cherry_inherits_dipel_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Bactospeine WG",
+            "crop": "cseresznye",
+            "target": "lombrago",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Bactospeine WG"
+    assert usage["dose"] == "1-1.5"
+    assert usage["dose_unit"] == "kg/ha"
+    assert usage["bbch"] == "11-87"
+
+
+def test_pesticide_info_texio_cucumber_inherits_teldor_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Texio",
+            "crop": "uborka",
+            "target": "botritisz",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Texio"
+    assert usage["dose"] == "1"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "12"
+
+
+def test_pesticide_info_mavrik_grape_leafhopper_inherits_klartan_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Mavrik 24 EW",
+            "crop": "szolo",
+            "target": "amerikai szolokaboca",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Mavrik 24 EW"
+    assert usage["dose"] == "0.2-0.3"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "56-80"
+
+
+def test_pesticide_info_wizard_corn_borer_inherits_sumi_alfa_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Wizard",
+            "crop": "kukorica",
+            "target": "kukoricamoly",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Wizard"
+    assert usage["dose"] == "0.3"
+    assert usage["dose_unit"] == "l/ha"
+    assert usage["bbch"] == "17-69"
+
+
+def test_pesticide_info_flovine_potato_inherits_folpan_usage() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Flovine 80 WDG",
+            "crop": "burgonya",
+            "target": "fitoftora",
+            "question_type": "usage",
+            "limit": 50,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["summary"]["usage_count"] == 1
+    usage = payload["usages"][0]
+    assert usage["product_name"] == "Flovine 80 WDG"
+    assert usage["dose"] == "1.25-2"
+    assert usage["dose_unit"] == "kg/ha"
+    assert usage["bbch"] == "31"
