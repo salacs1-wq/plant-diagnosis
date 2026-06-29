@@ -442,6 +442,19 @@ def usage_item(row: Any, bbch_query: int | None) -> dict[str, str]:
     }
 
 
+def permit_type_priority(value: str) -> int:
+    folded = fold_text(value)
+    if "alapengedely" in folded:
+        return 0
+    if "parhuzamos" in folded:
+        return 1
+    if "szarmaztatott" in folded:
+        return 2
+    if "szukseghelyzeti" in folded:
+        return 3
+    return 4
+
+
 def dedupe_usage_items(items: list[dict[str, str]]) -> list[dict[str, str]]:
     seen: set[tuple[str, ...]] = set()
     unique: list[dict[str, str]] = []
@@ -452,6 +465,7 @@ def dedupe_usage_items(items: list[dict[str, str]]) -> list[dict[str, str]]:
         items,
         key=lambda item: (
             not (bool(item["dose"]) and not bool(item["dose_unit"])),
+            permit_type_priority(item["permit_type"]),
             fold_text(item["product_name"]),
             item["permit_number"],
             fold_text(item["crop"]),
@@ -769,6 +783,83 @@ def exact_target_present(items: list[dict[str, str]], terms: list[str]) -> bool:
     )
 
 
+def resolve_product_names(
+    connection: Any,
+    product_name: str,
+    include_related: bool,
+) -> tuple[list[str], bool]:
+    folded_name = fold_text(product_name)
+    if include_related:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT product_name
+            FROM permit_index
+            WHERE fold(product_name) LIKE ?
+               OR fold(reference_product_name) LIKE ?
+            UNION
+            SELECT DISTINCT product_name
+            FROM usage
+            WHERE fold(product_name) LIKE ?
+               OR fold(reference_product_name) LIKE ?
+            ORDER BY product_name
+            """,
+            (
+                f"%{folded_name}%",
+                f"%{folded_name}%",
+                f"%{folded_name}%",
+                f"%{folded_name}%",
+            ),
+        ).fetchall()
+        return [fold_text(row["product_name"]) for row in rows], False
+
+    exact_rows = connection.execute(
+        """
+        SELECT DISTINCT product_name
+        FROM permit_index
+        WHERE fold(product_name) = ?
+        UNION
+        SELECT DISTINCT product_name
+        FROM usage
+        WHERE fold(product_name) = ?
+        ORDER BY product_name
+        """,
+        (folded_name, folded_name),
+    ).fetchall()
+    if exact_rows:
+        return [fold_text(row["product_name"]) for row in exact_rows], False
+
+    direct_rows = connection.execute(
+        """
+        SELECT DISTINCT product_name
+        FROM permit_index
+        WHERE fold(product_name) LIKE ?
+        UNION
+        SELECT DISTINCT product_name
+        FROM usage
+        WHERE fold(product_name) LIKE ?
+        ORDER BY product_name
+        """,
+        (f"%{folded_name}%", f"%{folded_name}%"),
+    ).fetchall()
+    if direct_rows:
+        return [fold_text(row["product_name"]) for row in direct_rows], False
+
+    reference_rows = connection.execute(
+        """
+        SELECT DISTINCT product_name
+        FROM permit_index
+        WHERE fold(reference_product_name) LIKE ?
+        UNION
+        SELECT DISTINCT product_name
+        FROM usage
+        WHERE fold(reference_product_name) LIKE ?
+        ORDER BY product_name
+        """,
+        (f"%{folded_name}%", f"%{folded_name}%"),
+    ).fetchall()
+    return [fold_text(row["product_name"]) for row in reference_rows], bool(reference_rows)
+
+
 @router.get("/pesticide-info", operation_id="getPesticideInformation")
 def pesticide_information(
     product_name: str | None = Query(default=None),
@@ -792,6 +883,7 @@ def pesticide_information(
     akg_allowed: str | None = Query(default=None),
     aop1_bee_allowed: str | None = Query(default=None),
     organic_allowed: str | None = Query(default=None),
+    include_related: str | None = Query(default="false"),
     question_type: str | None = Query(default="general"),
     limit: str | None = Query(default="50"),
     offset: str | None = Query(default="0"),
@@ -818,6 +910,7 @@ def pesticide_information(
         akg_allowed=akg_allowed,
         aop1_bee_allowed=aop1_bee_allowed,
         organic_allowed=organic_allowed,
+        include_related=include_related,
         question_type=question_type or "general",
     )
     query["query_type"] = query_route(query)
@@ -854,6 +947,7 @@ def pesticide_information(
         akg_value = parse_bool(akg_allowed, "akg_allowed")
         bee_value = parse_bool(aop1_bee_allowed, "aop1_bee_allowed")
         organic_value = parse_bool(organic_allowed, "organic_allowed")
+        include_related_value = parse_bool(include_related, "include_related") or False
         target_terms = unique_strings(
             [
                 query["target"],
@@ -875,29 +969,18 @@ def pesticide_information(
                     organic_value,
                 )
             resolved_names: list[str] = []
+            reference_fallback_used = False
             if query["product_name"]:
-                folded_name = fold_text(query["product_name"])
-                rows = connection.execute(
-                    """
-                    SELECT DISTINCT product_name
-                    FROM permit_index
-                    WHERE fold(product_name) LIKE ?
-                       OR fold(reference_product_name) LIKE ?
-                    UNION
-                    SELECT DISTINCT product_name
-                    FROM usage
-                    WHERE fold(product_name) LIKE ?
-                       OR fold(reference_product_name) LIKE ?
-                    ORDER BY product_name
-                    """,
-                    (
-                        f"%{folded_name}%",
-                        f"%{folded_name}%",
-                        f"%{folded_name}%",
-                        f"%{folded_name}%",
-                    ),
-                ).fetchall()
-                resolved_names = [fold_text(row["product_name"]) for row in rows]
+                resolved_names, reference_fallback_used = resolve_product_names(
+                    connection,
+                    query["product_name"],
+                    include_related_value,
+                )
+                if reference_fallback_used:
+                    note_parts.append(
+                        "No direct product-name usage match was found; reference "
+                        "products were searched as a fallback."
+                    )
 
             active_permits: list[str] = []
             if query["active_substance"]:

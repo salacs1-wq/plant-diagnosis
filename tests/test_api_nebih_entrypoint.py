@@ -606,6 +606,7 @@ def test_pesticide_info_decis_forte_returns_full_verified_usage_scope() -> None:
         params={
             "product_name": "Decis Forte",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 100,
         },
     )
@@ -698,18 +699,39 @@ def test_pesticide_info_sumi_alfa_grape_leafhopper_small_use_is_verified() -> No
     assert response.status_code == 200
     assert payload["ok"] is True
     assert payload["summary"]["status"] == "VERIFIED_USAGE"
-    assert payload["summary"]["usage_count"] == 3
-    assert {item["product_name"] for item in payload["usages"]} == {
-        "Sumi Alfa 5 EC",
-        "Sumi-Alpha 050 EC",
-        "Wizard",
-    }
+    assert payload["summary"]["usage_count"] == 1
+    assert {item["product_name"] for item in payload["usages"]} == {"Sumi Alfa 5 EC"}
+    assert {item["permit_type"] for item in payload["usages"]} == {"alapengedely"}
     assert payload["usages"][0]["dose"] == "0.2-0.3"
     assert payload["usages"][0]["dose_unit"] == "l/ha"
     assert payload["usages"][0]["bbch"] == "55-79"
     assert payload["usages"][0]["phi"] == "7"
     assert payload["usages"][0]["max_treatments"] == "2"
     assert payload["usages"][0]["verification_status"] == "VERIFIED_USAGE"
+
+
+def test_pesticide_info_sumi_alfa_base_filter_excludes_parallel_and_derived() -> None:
+    response = client.get(
+        "/action/pesticide-info",
+        params={
+            "product_name": "Sumi Alfa 5 EC",
+            "permit_type": "alapengedely",
+            "question_type": "dose",
+            "limit": 100,
+        },
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["summary"]["status"] == "VERIFIED_USAGE"
+    assert payload["usages"]
+    assert {item["product_name"] for item in payload["usages"]} == {"Sumi Alfa 5 EC"}
+    assert {item["permit_type"] for item in payload["usages"]} == {"alapengedely"}
+    assert "Sumi-Alpha 050 EC" not in {
+        item["product_name"] for item in payload["usages"]
+    }
+    assert "Wizard" not in {item["product_name"] for item in payload["usages"]}
 
 
 def test_pesticide_info_karate_grape_leafhopper_includes_reference_products() -> None:
@@ -720,6 +742,7 @@ def test_pesticide_info_karate_grape_leafhopper_includes_reference_products() ->
             "crop": "szolo",
             "target": "amerikai szolokaboca",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -749,6 +772,7 @@ def test_pesticide_info_mospilan_grape_leafhopper_includes_reference_products() 
             "crop": "szolo",
             "target": "amerikai szolokaboca",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -778,6 +802,7 @@ def test_pesticide_info_coragen_grape_moths_includes_reference_products() -> Non
             "crop": "szolo",
             "target": "szolomolyok",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -878,6 +903,7 @@ def test_pesticide_info_deltam_onion_aphids_small_use_is_verified() -> None:
             "crop": "voroshagyma",
             "target": "leveltetvek",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -928,6 +954,7 @@ def test_pesticide_info_mospilan_sunflower_aphids_includes_reference_products() 
             "crop": "napraforgo",
             "target": "leveltetvek",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -983,6 +1010,7 @@ def test_pesticide_info_deltaphar_leek_aphids_includes_related_products() -> Non
             "crop": "porehagyma",
             "target": "leveltetu",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -1011,6 +1039,7 @@ def test_pesticide_info_scatto_cucumber_whiteflies_includes_deltastar() -> None:
             "crop": "uborka",
             "target": "liszteskek",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -1036,6 +1065,7 @@ def test_pesticide_info_romble_onion_downy_mildew_includes_related_products() ->
             "crop": "voroshagyma",
             "target": "peronoszpora",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -1092,6 +1122,7 @@ def test_pesticide_info_leptostar_rape_pollen_beetle_handles_compact_target() ->
             "crop": "kaposztarepce",
             "target": "repcefenybogar",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -1168,6 +1199,7 @@ def test_pesticide_info_divam_leek_aphids_is_verified() -> None:
             "crop": "porehagyma",
             "target": "leveltetu",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -1243,6 +1275,7 @@ def test_pesticide_info_teppeki_coriander_handles_hyphenated_crop() -> None:
             "crop": "koriander",
             "target": "leveltetu",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
@@ -1271,6 +1304,7 @@ def test_pesticide_info_coragen_carrot_fly_includes_related_products() -> None:
             "crop": "sargarepa",
             "target": "sargarepalegy",
             "question_type": "usage",
+            "include_related": "true",
             "limit": 50,
         },
     )
