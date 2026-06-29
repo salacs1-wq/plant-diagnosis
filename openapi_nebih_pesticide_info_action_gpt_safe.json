@@ -1,0 +1,325 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "NEBIH Pesticide Information Action",
+    "description": "Hungarian pesticide database. Use this API first for pesticide questions.",
+    "version": "1.0.1"
+  },
+  "servers": [
+    {
+      "url": "https://nebih-sql-api-production.up.railway.app"
+    }
+  ],
+  "paths": {
+    "/action/pesticide-info": {
+      "get": {
+        "operationId": "getPesticideInformation",
+        "summary": "Look up pesticide information in NEBIH",
+        "description": "Use first for pesticide dose, crop, target, BBCH, PHI, active substance, permit, company or document questions.",
+        "parameters": [
+          {
+            "name": "product_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "active_substance",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "permit_number",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "permit_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "manufacturer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "representative",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "crop",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pest_or_disease",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "weed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "purpose",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bbch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phi_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "akg_allowed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          },
+          {
+            "name": "aop1_bee_allowed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          },
+          {
+            "name": "organic_allowed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          },
+          {
+            "name": "include_related",
+            "in": "query",
+            "required": false,
+            "description": "Use false for strict product search. Use true only when related parallel or derived products are requested.",
+            "schema": {
+              "type": "string",
+              "default": "false",
+              "enum": ["true", "false"]
+            }
+          },
+          {
+            "name": "question_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "general",
+              "enum": [
+                "dose",
+                "product",
+                "active_substance",
+                "usage",
+                "phi",
+                "documents",
+                "recommendation",
+                "general"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Handled response from the NEBIH pesticide API.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "query": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    },
+                    "products": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": true
+                      }
+                    },
+                    "active_substances": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": true
+                      }
+                    },
+                    "usages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": true
+                      }
+                    },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": true
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "product_count": {
+                          "type": "integer"
+                        },
+                        "usage_count": {
+                          "type": "integer"
+                        },
+                        "total_usage_count": {
+                          "type": "integer"
+                        },
+                        "active_substance_count": {
+                          "type": "integer"
+                        },
+                        "document_count": {
+                          "type": "integer"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "has_more": {
+                          "type": "boolean"
+                        },
+                        "next_offset": {
+                          "type": "integer"
+                        },
+                        "offset": {
+                          "type": "integer"
+                        },
+                        "note": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "query",
+                    "products",
+                    "active_substances",
+                    "usages",
+                    "documents",
+                    "summary"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
