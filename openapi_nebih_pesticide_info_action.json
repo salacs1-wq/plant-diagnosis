@@ -215,6 +215,16 @@
             }
           },
           {
+            "name": "include_related",
+            "in": "query",
+            "required": false,
+            "description": "Include products connected by reference/original-product relation. Default false keeps product-name queries strict.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
             "name": "question_type",
             "in": "query",
             "required": false,
