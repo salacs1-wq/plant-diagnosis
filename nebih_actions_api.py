@@ -40,6 +40,14 @@ def string_range(minimum: Any, maximum: Any) -> str:
     return f"{low}-{high}"
 
 
+def clean_dose_unit(dose: Any, unit: Any) -> str:
+    dose_text = text(dose).strip().casefold()
+    unit_text = text(unit).strip()
+    if unit_text and unit_text.casefold() in dose_text:
+        return ""
+    return unit_text
+
+
 def parse_limit(value: str | None, default: int, maximum: int) -> int:
     if value is None or not value.strip():
         return default
@@ -79,7 +87,7 @@ def action_item(
         "crop": text(crop),
         "target": text(target),
         "dose": text(dose),
-        "dose_unit": text(dose_unit),
+        "dose_unit": clean_dose_unit(dose, dose_unit),
         "bbch": text(bbch),
         "phi": text(phi),
         "max_treatments": text(max_treatments),
@@ -130,12 +138,12 @@ def usage(
     product_name: str | None = Query(default=None),
     crop: str | None = Query(default=None),
     target: str | None = Query(default=None),
-    limit: str | None = Query(default="5"),
+    limit: str | None = Query(default="50"),
 ) -> dict[str, Any]:
     try:
         if not product_name or not product_name.strip():
             raise ValueError("A product_name paraméter kötelező.")
-        page_size = parse_limit(limit, default=5, maximum=10)
+        page_size = parse_limit(limit, default=50, maximum=200)
         clauses = ["fold(u.product_name) LIKE ?"]
         parameters: list[Any] = [f"%{fold_text(product_name.strip())}%"]
         if crop and crop.strip():
@@ -206,12 +214,12 @@ def usage(
 def dose(
     product_name: str | None = Query(default=None),
     crop: str | None = Query(default=None),
-    limit: str | None = Query(default="10"),
+    limit: str | None = Query(default="50"),
 ) -> dict[str, Any]:
     try:
         if not product_name or not product_name.strip():
             raise ValueError("A product_name paraméter kötelező.")
-        page_size = parse_limit(limit, default=10, maximum=20)
+        page_size = parse_limit(limit, default=50, maximum=200)
         folded_product = fold_text(product_name.strip())
         with closing(connect()) as connection:
             exact_usage = connection.execute(
